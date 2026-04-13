@@ -2,6 +2,7 @@ import os
 import time
 import threading
 import logging
+import httpx
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
@@ -14,37 +15,81 @@ ADMIN_ID = 6791451829
 PAYPAL_LINK = "https://www.paypal.me/FrankRoger149"
 SUPPORT_USERNAME = "@fr26ulka"
 
+SUPABASE_URL = "https://htlkwttvzzmkcxrxrcbu.supabase.co"
+SUPABASE_KEY = "sb_publishable_IlH7wxPdNjNS1JnSovAIxw_1Fm7vFgK"
+HEADERS = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Content-Type": "application/json"
+}
+
 # ===== STATES =====
 user_state = {}
 pending_payments = {}
 BOT_OUVERT = True
 commandes_count = {}
-
-# ===== CART TIMER =====
 cart_timestamps = {}
 warned_users = set()
 
-# ===== SAFE EDIT =====
-async def safe_edit(query, text, reply_markup=None):
+# ===== SUPABASE FUNCTIONS =====
+def get_stock(tranche):
+    """Récupère tous les liens d'une tranche"""
     try:
-        await query.edit_message_text(text, reply_markup=reply_markup)
-    except Exception:
-        await query.message.reply_text(text, reply_markup=reply_markup)
+        r = httpx.get(
+            f"{SUPABASE_URL}/rest/v1/liens?tranche=eq.{tranche}&select=id,lien",
+            headers=HEADERS
+        )
+        return r.json()
+    except:
+        return []
+
+def count_stock(tranche):
+    """Compte le nombre de liens dans une tranche"""
+    return len(get_stock(tranche))
+
+def retirer_lien(tranche):
+    """Retire un lien de Supabase et le retourne"""
+    items = get_stock(tranche)
+    if not items:
+        return None
+    item = items[0]
+    try:
+        httpx.delete(
+            f"{SUPABASE_URL}/rest/v1/liens?id=eq.{item['id']}",
+            headers=HEADERS
+        )
+        return item['lien']
+    except:
+        return None
+
+def remettre_stock(tranche, lien):
+    """Remet un lien dans Supabase"""
+    try:
+        httpx.post(
+            f"{SUPABASE_URL}/rest/v1/liens",
+            headers=HEADERS,
+            json={"tranche": tranche, "lien": lien}
+        )
+    except:
+        pass
+
+def ajouter_lien(tranche, lien):
+    """Ajoute un lien dans Supabase"""
+    remettre_stock(tranche, lien)
 
 # ===== TRANCHES =====
 tranches = {
-    "25-49": {"label": "25→49 pts", "file": "25-49.txt", "prix": 1},
-    "50-74": {"label": "50→74 pts", "file": "50-74.txt", "prix": 2},
-    "75-99": {"label": "75→99 pts", "file": "75-99.txt", "prix": 3},
-    "100-124": {"label": "100→124 pts", "file": "100-124.txt", "prix": 4},
-    "125-149": {"label": "125→149 pts", "file": "125-149.txt", "prix": 5},
-    "150-174": {"label": "150→174 pts", "file": "150-174.txt", "prix": 6},
-    "175-199": {"label": "175→199 pts", "file": "175-199.txt", "prix": 7},
-    "200-400": {"label": "200→400 pts", "file": "200-400.txt", "prix": 8}
+    "25-49": {"label": "25→49 pts", "prix": 1},
+    "50-74": {"label": "50→74 pts", "prix": 2},
+    "75-99": {"label": "75→99 pts", "prix": 3},
+    "100-124": {"label": "100→124 pts", "prix": 4},
+    "125-149": {"label": "125→149 pts", "prix": 5},
+    "150-174": {"label": "150→174 pts", "prix": 6},
+    "175-199": {"label": "175→199 pts", "prix": 7},
+    "200-400": {"label": "200→400 pts", "prix": 8}
 }
 
 cart = {}
-locks = {t: threading.Lock() for t in tranches}
 
 # ===== PROMO MESSAGE =====
 PROMO_MESSAGE = """
@@ -79,20 +124,35 @@ def touch_cart(user_id):
     cart_timestamps[user_id] = time.time()
     warned_users.discard(user_id)
 
-# ===== HELPER TIMER =====
 def get_timer_text(user_id):
     last_seen = cart_timestamps.get(user_id, time.time())
     elapsed = time.time() - last_seen
     remaining_total_sec = max(0, int(10 * 60 - elapsed))
     remaining_min = remaining_total_sec // 60
     remaining_sec = remaining_total_sec % 60
-
     if remaining_min >= 2:
         return f"⏳ Panier valide encore {remaining_min} min {remaining_sec:02d} sec"
     elif remaining_total_sec > 0:
         return f"🚨 Expire dans {remaining_min} min {remaining_sec:02d} sec !"
     else:
         return "🚨 Panier expiré !"
+
+# ===== SAFE EDIT =====
+async def safe_edit(query, text, reply_markup=None):
+    try:
+        await query.edit_message_text(text, reply_markup=reply_markup)
+    except Exception:
+        await query.message.reply_text(text, reply_markup=reply_markup)
+
+# ===== CART =====
+def get_cart(user_id):
+    return cart.setdefault(user_id, {})
+
+def cart_total(user_cart):
+    return sum(d["qty"] * d["prix"] for d in user_cart.values())
+
+def apply_discount(total, user_cart):
+    return round(total * 0.9, 2) if len(user_cart) >= 3 else total
 
 # ===== CLEANUP JOB =====
 async def cleanup_carts(context):
@@ -122,7 +182,7 @@ async def cleanup_carts(context):
                     chat_id=user_id,
                     text="⏳ Ton panier a expiré.\n\nTes articles ont été remis en stock.\n\nTape /start pour recommencer."
                 )
-            except Exception:
+            except:
                 pass
 
         elif elapsed > WARN_AT and user_id not in warned_users:
@@ -132,43 +192,8 @@ async def cleanup_carts(context):
                     chat_id=user_id,
                     text="⚠️ Ton panier expire dans 2 minutes !\n\nFinis ta commande ou tes articles seront remis en stock."
                 )
-            except Exception:
+            except:
                 pass
-
-# ===== STOCK =====
-def lire_liens(tranche):
-    f = tranches[tranche]["file"]
-    if os.path.exists(f):
-        with open(f, encoding="utf-8") as file:
-            return [l.strip() for l in file if l.strip()]
-    return []
-
-def retirer_lien(tranche):
-    with locks[tranche]:
-        liens = lire_liens(tranche)
-        if not liens:
-            return None
-        lien = liens.pop(0)
-        with open(tranches[tranche]["file"], "w", encoding="utf-8") as f:
-            f.writelines(l + "\n" for l in liens)
-        return lien
-
-def remettre_stock(tranche, lien):
-    with locks[tranche]:
-        liens = lire_liens(tranche)
-        liens.insert(0, lien)
-        with open(tranches[tranche]["file"], "w", encoding="utf-8") as f:
-            f.writelines(l + "\n" for l in liens)
-
-# ===== CART =====
-def get_cart(user_id):
-    return cart.setdefault(user_id, {})
-
-def cart_total(user_cart):
-    return sum(d["qty"] * d["prix"] for d in user_cart.values())
-
-def apply_discount(total, user_cart):
-    return round(total * 0.9, 2) if len(user_cart) >= 3 else total
 
 # ===== START =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -204,7 +229,7 @@ async def show_menu(query):
     keyboard = []
 
     for t, info in tranches.items():
-        nb = len(lire_liens(t))
+        nb = count_stock(t)
         if nb > 0:
             text = f"{info['label']} | 📦 {nb} en stock | {info['prix']}€"
             data = f"add|{t}"
@@ -471,10 +496,9 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cart_timestamps.pop(user_id, None)
             warned_users.discard(user_id)
 
-            # ===== SUPPRIME LE MESSAGE AVEC LES BOUTONS =====
             try:
                 await query.message.delete()
-            except Exception:
+            except:
                 pass
 
             # ===== FIDÉLITÉ =====
@@ -518,7 +542,7 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             try:
                 await query.message.delete()
-            except Exception:
+            except:
                 pass
 
             await context.bot.send_message(
@@ -551,7 +575,7 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             try:
                 await query.message.delete()
-            except Exception:
+            except:
                 pass
 
             await context.bot.send_message(chat_id=ADMIN_ID, text="❌ Refus envoyé !")
@@ -574,6 +598,15 @@ async def cmd_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
     BOT_OUVERT = False
     await update.message.reply_text("🔒 Boutique fermée !")
 
+async def cmd_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        return
+    text = "📦 STOCK ACTUEL :\n\n"
+    for t, info in tranches.items():
+        nb = count_stock(t)
+        text += f"{info['label']} : {nb} liens\n"
+    await update.message.reply_text(text)
+
 async def cmd_fidelite(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
         return
@@ -592,6 +625,7 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("open", cmd_open))
     app.add_handler(CommandHandler("close", cmd_close))
+    app.add_handler(CommandHandler("stock", cmd_stock))
     app.add_handler(CommandHandler("fidelite", cmd_fidelite))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown_message))
     app.add_handler(CallbackQueryHandler(admin_actions, pattern=r"^(approve|reject|r1|r2|r3)\|"))
