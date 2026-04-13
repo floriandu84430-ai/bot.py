@@ -1,1 +1,3 @@
-
+https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=/La4Z7VZpiDyY96n1Jd0c5ZAC5t6wVpCSLA55wrZgvI=&channel=website
+https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=1GJd+AElDhEfZjsLdWMDRZrZGVTkcg6gJ/pJTEpv7yk=&channel=website
+https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=1Mk3Ygx6Q0QrTjOhPvtkVrPochXDafqwzzoJbNkOQMM=&channel=website
