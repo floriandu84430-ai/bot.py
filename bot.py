@@ -10,7 +10,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
 
 # ===== CONFIG =====
-BOT_TOKEN = "PUT_YOUR_BOT_TOKEN_HERE"
+BOT_TOKEN = "8792949268:AAFEzRs2f0X5MFC7rYsJ72kxDY2BXjCY0Zk"
 ADMIN_ID = 6791451829
 PAYPAL_LINK = "https://www.paypal.me/FrankRoger149"
 SUPPORT_USERNAME = "@fr26ulka"
