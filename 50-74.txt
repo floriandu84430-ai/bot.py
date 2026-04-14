@@ -1,6 +1,6 @@
-https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=I3//eN8sDCUxkwVcxBu1NFyyMYEEwPdqvDYfmIWp17U=&channel=website
-https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=IFk3qNw/Q4jNmgLV9AHHAF9/CztNWR7MfxVtVismGjM=&channel=website
+https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=HvqyZcSxJ1yH5pLYvBP60dMm5ZMMXT/qo3dCm1/P8SU=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=8GvVbeJgSPywEqxNwPcyJCYlpzAl4yty6LenDLiWlF4=&channel=website
+https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=8ch4260XFFb9y6IXi2bhcVoTH+9As92GOCTGcbD6Aew=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=J+wMEMUvixnU9w5BerVbZBXguGpnWgyaJhBj8ulQOq0=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=91nQT+w59wnXBTbdm2uCVRW53FFfS+9iIXCagTIylJo=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=/La4Z7VZpiDyY96n1Jd0c5ZAC5t6wVpCSLA55wrZgvI=&channel=website
@@ -9,7 +9,6 @@ https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=9FYVcckZasiqtdRoJZqm
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=JtbMMkx44TfK6q6vmV64VziFZPYP8p107Ws1+Se9/AA=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=KGIi0WDcn+y1hjC3OtSyGGSgyJWvS3XWHltzycehenw=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=AFu//AK/LJCL1t6Fe9AS4CeSViMN8oBB4/IqjsCJ01U=&channel=website
-https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=ALGB+yvU94geV5pPFLHN4Ofo0wwDETGry7ZBuW8tk64=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=APNix9pEZXbtpviOfUglxm88Z/KwnlP+F3r8FxF/Tds=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=AaM8Q5gsxHoC0ekxNA55rl0vAEg08t0IkCTnQgmxKco=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=1GJd+AElDhEfZjsLdWMDRZrZGVTkcg6gJ/pJTEpv7yk=&channel=website
@@ -23,13 +22,13 @@ https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=3+eZtJPRyvmGP9HJ9Fnb
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=CNeEcC00NhgFQDiDSuOq/HQ2HpbFrDoGld0jmwbXdjE=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=3D+lOO5xqjjZp/X7Sl972v2GQuFLhi/xfSPAHO2Rz+U=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=N/O+Be2ur9bd/OfOZHvm+EQqUJqbFP+tohObCOC0xR0=&channel=website
+https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=NRqyWQfOWNk9kNyQw8OCk+epVjqI03gUszsCGeQFI5I=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=NXK2uNPTx9o+QzxMd4ADPFVqaUOu3ctjPalne2jvZis=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=44tycCaAlAjWY+SssHRJy28Y234JNOKjCrbJeYHJ+nE=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=NmOt7WziR5cBz2aFZ9cfDbWQD17ZH9a51EH7RcPIKL4=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=O6gcUS02veYxFKdFI+Ffpydih0eZgoLOL5ONxHoYH2M=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=O8N4BBHN+UQvKVMyLjsIIGxLzuP2gfDO3o2iNXyWtuU=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=5/UxcvdZfn2pxiQiL1s+cbz9RpPVnwvvEbJm8PrjtUA=&channel=website
-https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=5SiJ4KEjQRiH/FtxdzS9LMQMLI5drXabC3QL8Nq0mgg=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=P+IvGbL63yTDA1vaOeVdSWQZUGkJuPEGS+1IR3b74w8=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=FG/Cyn13JSgqOm1QeLU3Cs8G8lclA0lkTSVM9QyNf3w=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=FqHd4lPfIJU652aXtJmUcjasZQxs6XMeBnrZLWG2HOo=&channel=website
@@ -37,8 +36,8 @@ https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=GAeQ+9xkYEVmDoBzkevq
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=Q4aNr8Yp26TkO+LaKd3NcRDAfI15eWHWwipj1laxHiI=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=Q5Tdmm9uhf30TA60Py8F3K+6PJhD/7PKoIHgJbE+VeY=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=72KcLOLv6PhCxSju7tYJ/3/w6YNLp2LoCR6QHCSFJVM=&channel=website
-https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=756IwiFH4cGCypDqNPhbl6/T1d/V+elmtFGQ7vjmPNA=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=QO8I+XkAl7PQph4JLFQ058Hglo4QGaZPTgfOw2zyytM=&channel=website
+https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=756IwiFH4cGCypDqNPhbl6/T1d/V+elmtFGQ7vjmPNA=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=7VQjeEMTQCi9QJjc/qI5bGvqcsmUjs5rwK/gaPwVhKU=&channel=website
-https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=7tZ/KZT8azuOnNHNx0oaXihFo5/re66x0+zHiqnTDJc=&channel=website
 https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=HXqXkjZ7vNVbm30VxdhoTlL1EAkmUQRFX+u0+9oJdYs=&channel=website
+https://mcdo.captainwallet.com/fr/fidelite?user[identifier]=7tZ/KZT8azuOnNHNx0oaXihFo5/re66x0+zHiqnTDJc=&channel=website
