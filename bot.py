@@ -2,6 +2,8 @@ import os
 import time
 import threading
 import logging
+import requests
+import re
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
 
@@ -9,8 +11,8 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
 
 # ===== CONFIG =====
-BOT_TOKEN = "8792949268:AAFEzRs2f0X5MFC7rYsJ72kxDY2BXjCY0Zk"
-ADMIN_ID = 6791451829
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "METS_TON_TOKEN_ICI")
+ADMIN_ID = int(os.environ.get("ADMIN_ID", "6791451829"))
 PAYPAL_LINK = "https://www.paypal.me/FrankRoger149"
 SUPPORT_USERNAME = "@fr26ulka"
 
@@ -19,28 +21,22 @@ user_state = {}
 pending_payments = {}
 BOT_OUVERT = True
 commandes_count = {}
+approved_orders = set()
 
 # ===== CART TIMER =====
 cart_timestamps = {}
 warned_users = set()
 
-# ===== SAFE EDIT =====
-async def safe_edit(query, text, reply_markup=None):
-    try:
-        await query.edit_message_text(text, reply_markup=reply_markup)
-    except Exception:
-        await query.message.reply_text(text, reply_markup=reply_markup)
-
 # ===== TRANCHES =====
 tranches = {
-    "25-49": {"label": "25→49 pts", "file": "25-49.txt", "prix": 1},
-    "50-74": {"label": "50→74 pts", "file": "50-74.txt", "prix": 2},
-    "75-99": {"label": "75→99 pts", "file": "75-99.txt", "prix": 3},
-    "100-124": {"label": "100→124 pts", "file": "100-124.txt", "prix": 4},
-    "125-149": {"label": "125→149 pts", "file": "125-149.txt", "prix": 5},
-    "150-174": {"label": "150→174 pts", "file": "150-174.txt", "prix": 6},
-    "175-199": {"label": "175→199 pts", "file": "175-199.txt", "prix": 7},
-    "200-400": {"label": "200→400 pts", "file": "200-400.txt", "prix": 8}
+    "25-49":   {"label": "25→49 pts",   "file": "25-49.txt",   "prix": 1, "min_pts": 25},
+    "50-74":   {"label": "50→74 pts",   "file": "50-74.txt",   "prix": 2, "min_pts": 50},
+    "75-99":   {"label": "75→99 pts",   "file": "75-99.txt",   "prix": 3, "min_pts": 75},
+    "100-124": {"label": "100→124 pts", "file": "100-124.txt", "prix": 4, "min_pts": 100},
+    "125-149": {"label": "125→149 pts", "file": "125-149.txt", "prix": 5, "min_pts": 125},
+    "150-174": {"label": "150→174 pts", "file": "150-174.txt", "prix": 6, "min_pts": 150},
+    "175-199": {"label": "175→199 pts", "file": "175-199.txt", "prix": 7, "min_pts": 175},
+    "200-400": {"label": "200→400 pts", "file": "200-400.txt", "prix": 8, "min_pts": 200},
 }
 
 cart = {}
@@ -74,10 +70,77 @@ MESSAGE_FERME = """
 👉 https://t.me/fr26ulkaa
 """
 
+# ===== VÉRIFICATION LIEN (triple vérification) =====
+def check_link_and_get_points(url):
+    """
+    Triple vérification :
+    1. Disponibilité (code 200)
+    2. Absence de mots d'erreur
+    3. Lecture du nombre de points réels
+    Retourne le nombre de points (int) ou None si invalide.
+    """
+    headers = {"User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)"}
+    try:
+        r = requests.get(url, headers=headers, timeout=5)
+
+        # 1. Disponibilité
+        if r.status_code != 200:
+            return None
+
+        page_text = r.text.lower()
+
+        # 2. Détection d'erreurs
+        erreurs = ["indisponible", "expire", "erreur", "oups", "tentative"]
+        if any(err in page_text for err in erreurs):
+            return None
+
+        # 3. Lecture des points
+        match = re.search(r'(\d+)\s*point', page_text)
+        if match:
+            points = int(match.group(1))
+            if points == 0:
+                return None
+            return points
+
+    except Exception:
+        pass
+    return None
+
+
+# ===== TROUVER LA BONNE TRANCHE SELON LES POINTS =====
+def get_tranche_from_points(points):
+    if 25 <= points <= 49:
+        return "25-49"
+    elif 50 <= points <= 74:
+        return "50-74"
+    elif 75 <= points <= 99:
+        return "75-99"
+    elif 100 <= points <= 124:
+        return "100-124"
+    elif 125 <= points <= 149:
+        return "125-149"
+    elif 150 <= points <= 174:
+        return "150-174"
+    elif 175 <= points <= 199:
+        return "175-199"
+    elif 200 <= points <= 400:
+        return "200-400"
+    return None
+
+
+# ===== SAFE EDIT =====
+async def safe_edit(query, text, reply_markup=None):
+    try:
+        await query.edit_message_text(text, reply_markup=reply_markup)
+    except Exception:
+        await query.message.reply_text(text, reply_markup=reply_markup)
+
+
 # ===== TOUCH CART =====
 def touch_cart(user_id):
     cart_timestamps[user_id] = time.time()
     warned_users.discard(user_id)
+
 
 # ===== HELPER TIMER =====
 def get_timer_text(user_id):
@@ -94,18 +157,39 @@ def get_timer_text(user_id):
     else:
         return "🚨 Panier expiré !"
 
+
 # ===== CLEANUP JOB =====
 async def cleanup_carts(context):
     now = time.time()
     WARN_AT = 8 * 60
     TIMEOUT = 10 * 60
+    MAX_SCREENSHOT_WAIT = 2 * 60 * 60  # 2h max même en attente screenshot
 
     for user_id in list(cart.keys()):
-        if user_state.get(user_id) == "awaiting_screenshot":
-            continue
-
         last_seen = cart_timestamps.get(user_id, 0)
         elapsed = now - last_seen
+
+        # Panier en attente screenshot : expire après 2h max
+        if user_state.get(user_id) == "awaiting_screenshot":
+            if elapsed > MAX_SCREENSHOT_WAIT:
+                user_cart = cart.pop(user_id, {})
+                cart_timestamps.pop(user_id, None)
+                user_state.pop(user_id, None)
+                warned_users.discard(user_id)
+                for t, d in user_cart.items():
+                    for lien in d["items"]:
+                        remettre_stock(t, lien)
+                try:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=(
+                            "⏳ Ta commande en attente a expiré (délai de 2h dépassé).\n\n"
+                            f"Contacte-moi si tu as déjà payé : {SUPPORT_USERNAME}"
+                        )
+                    )
+                except Exception:
+                    pass
+            continue
 
         if elapsed > TIMEOUT:
             user_cart = cart.pop(user_id, {})
@@ -135,6 +219,7 @@ async def cleanup_carts(context):
             except Exception:
                 pass
 
+
 # ===== STOCK =====
 def lire_liens(tranche):
     f = tranches[tranche]["file"]
@@ -156,9 +241,11 @@ def retirer_lien(tranche):
 def remettre_stock(tranche, lien):
     with locks[tranche]:
         liens = lire_liens(tranche)
-        liens.insert(0, lien)
-        with open(tranches[tranche]["file"], "w", encoding="utf-8") as f:
-            f.writelines(l + "\n" for l in liens)
+        if lien not in liens:
+            liens.insert(0, lien)
+            with open(tranches[tranche]["file"], "w", encoding="utf-8") as f:
+                f.writelines(l + "\n" for l in liens)
+
 
 # ===== CART =====
 def get_cart(user_id):
@@ -169,6 +256,7 @@ def cart_total(user_cart):
 
 def apply_discount(total, user_cart):
     return round(total * 0.9, 2) if len(user_cart) >= 3 else total
+
 
 # ===== START =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -199,6 +287,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.callback_query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
+
 # ===== MENU =====
 async def show_menu(query):
     keyboard = []
@@ -217,6 +306,7 @@ async def show_menu(query):
     keyboard.append([InlineKeyboardButton("🔙 Retour", callback_data="start")])
 
     await safe_edit(query, "🔥 Boutique :", InlineKeyboardMarkup(keyboard))
+
 
 # ===== PANIER =====
 async def refresh_cart(query, user_id):
@@ -255,9 +345,11 @@ async def refresh_cart(query, user_id):
 
     await safe_edit(query, text, InlineKeyboardMarkup(keyboard))
 
+
 # ===== UNKNOWN MESSAGE =====
 async def unknown_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 Pour accéder à la boutique, tape /start")
+
 
 # ===== CALLBACK USER =====
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -297,8 +389,33 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lien = retirer_lien(t)
 
             if not lien:
-                await safe_edit(query, "❌ Stock vide")
+                await safe_edit(query, "❌ Stock vide pour cette tranche.")
                 return
+
+            # Vérification rapide dès l'ajout au panier
+            points = check_link_and_get_points(lien)
+            min_pts = tranches[t]["min_pts"]
+
+            if points is None or points < min_pts:
+                # Lien invalide ou mal classé : on le recycle dans la bonne tranche
+                if points is not None:
+                    tranche_reelle = get_tranche_from_points(points)
+                    if tranche_reelle:
+                        remettre_stock(tranche_reelle, lien)
+                # On essaie le lien suivant
+                lien = retirer_lien(t)
+                if lien:
+                    points2 = check_link_and_get_points(lien)
+                    if points2 is None or points2 < min_pts:
+                        if points2 is not None:
+                            tranche_reelle2 = get_tranche_from_points(points2)
+                            if tranche_reelle2:
+                                remettre_stock(tranche_reelle2, lien)
+                        await safe_edit(query, "❌ Aucun lien valide disponible pour cette tranche.\n\nEssaie une autre tranche ou reviens plus tard.")
+                        return
+                else:
+                    await safe_edit(query, "❌ Stock vide pour cette tranche.")
+                    return
 
             user_cart = get_cart(user_id)
 
@@ -321,8 +438,16 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if t in user_cart:
                 lien = retirer_lien(t)
                 if lien:
-                    user_cart[t]["qty"] += 1
-                    user_cart[t]["items"].append(lien)
+                    points = check_link_and_get_points(lien)
+                    min_pts = tranches[t]["min_pts"]
+                    if points is None or points < min_pts:
+                        if points is not None:
+                            tranche_reelle = get_tranche_from_points(points)
+                            if tranche_reelle:
+                                remettre_stock(tranche_reelle, lien)
+                    else:
+                        user_cart[t]["qty"] += 1
+                        user_cart[t]["items"].append(lien)
 
             touch_cart(user_id)
             await refresh_cart(query, user_id)
@@ -383,6 +508,7 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.error(e)
         await safe_edit(query, "❌ Erreur")
 
+
 # ===== PHOTO =====
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -428,6 +554,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Reçu ! En attente validation.")
     user_state[user_id] = None
 
+
 # ===== ADMIN CALLBACK =====
 async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -438,44 +565,119 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         if data.startswith("approve"):
             user_id = int(data.split("|")[1])
+
+            # Protection double-clic admin
+            if user_id in approved_orders:
+                await query.answer("⚠️ Déjà validé !", show_alert=True)
+                return
+            approved_orders.add(user_id)
+
             user_cart = cart.get(user_id, {})
 
-            liens_list = [
-                item
-                for t, d in user_cart.items()
-                for item in d["items"]
-            ]
+            # Panier expiré entre screenshot et validation
+            if not user_cart:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=(
+                        f"⚠️ Ton panier avait expiré au moment de la validation.\n\n"
+                        f"Contacte-moi si tu as déjà payé : {SUPPORT_USERNAME}"
+                    )
+                )
+                await context.bot.send_message(
+                    chat_id=ADMIN_ID,
+                    text="⚠️ Panier expiré avant validation ! Le client a été prévenu."
+                )
+                approved_orders.discard(user_id)
+                return
 
-            text = (
-                "🎉 Paiement validé !\n\n"
-                "🙏 Merci pour ta commande 💙\n\n"
-                "📦 Clique sur ton lien ci-dessous ⬇️"
-                + "\n\n"
-                + PROMO_MESSAGE
-                + "\n\n⭐ Merci pour ta confiance ! À bientôt 👋"
-            )
+            liens_valides = []
+            liens_manquants = 0
+            total_demande = sum(d["qty"] for d in user_cart.values())
+
+            for t, d in list(user_cart.items()):
+                tranche_attendue = t
+                min_pts = tranches[t]["min_pts"]
+
+                for _ in range(d["qty"]):
+                    lien = d["items"].pop(0) if d["items"] else None
+                    envoye = False
+                    tentatives = 0
+                    MAX_TENTATIVES = 10
+
+                    while not envoye and tentatives < MAX_TENTATIVES:
+                        tentatives += 1
+
+                        if lien is None:
+                            lien = retirer_lien(tranche_attendue)
+
+                        if lien is None:
+                            # Stock vide pour cette tranche
+                            liens_manquants += 1
+                            break
+
+                        points = check_link_and_get_points(lien)
+
+                        if points is None:
+                            # Lien mort → on jette et on cherche le suivant
+                            lien = None
+                            continue
+
+                        if points < min_pts:
+                            # Lien mal classé → recyclage dans la bonne tranche
+                            tranche_reelle = get_tranche_from_points(points)
+                            if tranche_reelle:
+                                remettre_stock(tranche_reelle, lien)
+                            lien = None
+                            continue
+
+                        # ✅ Lien parfait
+                        liens_valides.append(lien)
+                        envoye = True
+
+                    if not envoye and tentatives >= MAX_TENTATIVES:
+                        liens_manquants += 1
+
+            # ===== COMMUNICATION ADAPTATIVE =====
+            if len(liens_valides) == total_demande:
+                # Succès total
+                msg = (
+                    f"🍟 *TA COMMANDE EST PRÊTE !*\n\n"
+                    f"Voici tes *{total_demande}* accès McDo ✅\n"
+                    f"Régale-toi bien et bon appétit ! 🍗🍟"
+                )
+            elif len(liens_valides) > 0:
+                # Succès partiel
+                msg = (
+                    f"🍟 *INFOS SUR TA COMMANDE*\n\n"
+                    f"Sur les *{total_demande}* liens commandés, *{len(liens_valides)}* sont confirmés ✅\n\n"
+                    f"⚠️ *{liens_manquants}* lien(s) n'ont pas pu être livrés (stock épuisé ou liens invalides).\n\n"
+                    f"👉 Contacte-moi pour un remboursement ou un remplacement : {SUPPORT_USERNAME}"
+                )
+            else:
+                # Échec total
+                msg = (
+                    f"😔 *Désolé, nous n'avons pas pu livrer ta commande.*\n\n"
+                    f"Tous les liens de ta tranche sont actuellement indisponibles.\n\n"
+                    f"👉 Contacte-moi immédiatement pour être remboursé : {SUPPORT_USERNAME}"
+                )
 
             keyboard_liens = [
-                [InlineKeyboardButton(f"🍟 Lien McDo {i+1} — Clique ici !", url=lien)]
-                for i, lien in enumerate(liens_list)
+                [InlineKeyboardButton(f"🍟 Lien McDo {i+1}", url=l)]
+                for i, l in enumerate(liens_valides)
             ]
-            keyboard_liens.append([InlineKeyboardButton("🏪 Retour à la boutique", callback_data="menu")])
+            keyboard_liens.append([InlineKeyboardButton("🏪 Retour Boutique", callback_data="menu")])
 
             await context.bot.send_message(
                 chat_id=user_id,
-                text=text,
-                reply_markup=InlineKeyboardMarkup(keyboard_liens)
+                text=msg + "\n\n" + PROMO_MESSAGE,
+                reply_markup=InlineKeyboardMarkup(keyboard_liens),
+                parse_mode="Markdown"
             )
 
+            # Nettoyage
             cart.pop(user_id, None)
             cart_timestamps.pop(user_id, None)
             warned_users.discard(user_id)
-
-            # ===== SUPPRIME LE MESSAGE AVEC LES BOUTONS =====
-            try:
-                await query.message.delete()
-            except Exception:
-                pass
 
             # ===== FIDÉLITÉ =====
             commandes_count[user_id] = commandes_count.get(user_id, 0) + 1
@@ -487,33 +689,44 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await context.bot.send_message(
                         chat_id=user_id,
                         text=(
-                            "🎁 CADEAU FIDÉLITÉ !\n\n"
+                            "🎁 *CADEAU FIDÉLITÉ !*\n\n"
                             "🏆 Félicitations ! Tu as atteint 5 commandes !\n\n"
                             "💙 Voici ton lien offert (50→74 pts) :"
                         ),
                         reply_markup=InlineKeyboardMarkup([
                             [InlineKeyboardButton("🎀 Clique ici pour ton cadeau !", url=lien_cadeau)]
-                        ])
+                        ]),
+                        parse_mode="Markdown"
                     )
             else:
                 restant = 5 - (count % 5)
                 await context.bot.send_message(
                     chat_id=user_id,
-                    text=(
-                        f"⭐ Fidélité : {count % 5}/5\n\n"
-                        f"➡️ Plus que {restant} commande(s) pour ton lien offert ! 🎁"
-                    )
+                    text=f"⭐ Fidélité : {count % 5}/5\n\n➡️ Plus que {restant} commande(s) pour ton lien offert ! 🎁"
                 )
 
-            await context.bot.send_message(chat_id=ADMIN_ID, text="✅ Commande validée et envoyée !")
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=(
+                    f"✅ Commande validée !\n"
+                    f"👤 User : {user_id}\n"
+                    f"📦 Envoyés : {len(liens_valides)}/{total_demande}\n"
+                    f"❌ Manquants : {liens_manquants}"
+                )
+            )
 
         elif data.startswith("reject"):
             user_id = data.split("|")[1]
 
             keyboard = [
-                [InlineKeyboardButton("Mauvais paiement", callback_data=f"r1|{user_id}")],
+                [InlineKeyboardButton("Mauvais paiement",  callback_data=f"r1|{user_id}")],
                 [InlineKeyboardButton("Montant incorrect", callback_data=f"r2|{user_id}")],
-                [InlineKeyboardButton("Pas de paiement", callback_data=f"r3|{user_id}")]
+                [InlineKeyboardButton("Pas de paiement",   callback_data=f"r3|{user_id}")]
             ]
 
             try:
@@ -559,6 +772,7 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logging.error(e)
 
+
 # ===== COMMANDES ADMIN =====
 async def cmd_open(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global BOT_OUVERT
@@ -584,6 +798,7 @@ async def cmd_fidelite(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = int(args[0])
     count = commandes_count.get(uid, 0)
     await update.message.reply_text(f"👤 User {uid} : {count} commande(s)")
+
 
 # ===== MAIN =====
 if __name__ == "__main__":
