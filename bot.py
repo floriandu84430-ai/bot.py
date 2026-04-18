@@ -76,7 +76,7 @@ MESSAGE_FERME = """
 👉 https://t.me/fr26ulkaa
 """
 
-# ===== STOCK FUNCTIONS (Supabase) =====
+# ===== STOCK FUNCTIONS =====
 def lire_liens(tranche):
     with stock_lock:
         res = supabase.table("stock").select("id, lien").eq("tranche", tranche).order("id").execute()
@@ -91,12 +91,27 @@ def retirer_lien(tranche):
         supabase.table("stock").delete().eq("id", row["id"]).execute()
         return row["lien"]
 
-def remettre_stock(tranche, lien):
+def supprimer_lien_stock(tranche, lien):
+    """Supprime définitivement un lien du stock d'une tranche"""
     with stock_lock:
-        # Vérifie que le lien n'existe pas déjà
+        supabase.table("stock").delete().eq("tranche", tranche).eq("lien", lien).execute()
+
+def remettre_stock(tranche, lien):
+    """Remet un lien dans une tranche (utilisé pour annulations/remboursements)"""
+    with stock_lock:
         res = supabase.table("stock").select("id").eq("tranche", tranche).eq("lien", lien).execute()
         if not res.data:
             supabase.table("stock").insert({"tranche": tranche, "lien": lien}).execute()
+
+def deplacer_lien(ancienne_tranche, nouvelle_tranche, lien):
+    """Déplace un lien d'une tranche vers une autre"""
+    with stock_lock:
+        # Supprimer de l'ancienne tranche
+        supabase.table("stock").delete().eq("tranche", ancienne_tranche).eq("lien", lien).execute()
+        # Ajouter dans la nouvelle tranche si pas déjà présent
+        res = supabase.table("stock").select("id").eq("tranche", nouvelle_tranche).eq("lien", lien).execute()
+        if not res.data:
+            supabase.table("stock").insert({"tranche": nouvelle_tranche, "lien": lien}).execute()
 
 def ajouter_liens(tranche, nouveaux_liens):
     with stock_lock:
@@ -138,6 +153,28 @@ async def safe_edit(query, text, reply_markup=None):
         await query.edit_message_text(text, reply_markup=reply_markup)
     except Exception:
         await query.message.reply_text(text, reply_markup=reply_markup)
+
+# ===== BOUTONS TRANCHE =====
+def get_keyboard_tranche(user_id):
+    """Retourne le clavier de choix de tranche pour remettre un mauvais lien"""
+    keyboard = [
+        [
+            InlineKeyboardButton("25-49 pts", callback_data=f"move|{user_id}|25-49"),
+            InlineKeyboardButton("50-74 pts", callback_data=f"move|{user_id}|50-74"),
+            InlineKeyboardButton("75-99 pts", callback_data=f"move|{user_id}|75-99"),
+        ],
+        [
+            InlineKeyboardButton("100-124 pts", callback_data=f"move|{user_id}|100-124"),
+            InlineKeyboardButton("125-149 pts", callback_data=f"move|{user_id}|125-149"),
+            InlineKeyboardButton("150-174 pts", callback_data=f"move|{user_id}|150-174"),
+        ],
+        [
+            InlineKeyboardButton("175-199 pts", callback_data=f"move|{user_id}|175-199"),
+            InlineKeyboardButton("200-400 pts", callback_data=f"move|{user_id}|200-400"),
+            InlineKeyboardButton("🗑️ Supprimer", callback_data=f"move|{user_id}|delete"),
+        ],
+    ]
+    return InlineKeyboardMarkup(keyboard)
 
 # ===== CLEANUP JOB =====
 async def cleanup_carts(context):
@@ -283,7 +320,7 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     data = query.data
     user_id = query.from_user.id
-    if data.startswith(("approve", "reject", "badlink", "r1", "r2", "r3")):
+    if data.startswith(("approve", "reject", "badlink", "move", "r1", "r2", "r3")):
         return
     try:
         if data == "menu":
@@ -441,6 +478,7 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
 
     try:
+        # ===== LIEN OK =====
         if data.startswith("approve"):
             user_id = int(data.split("|")[1])
             pending = pending_admin.get(user_id)
@@ -482,6 +520,7 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
 
+        # ===== MAUVAIS LIEN =====
         elif data.startswith("badlink"):
             user_id = int(data.split("|")[1])
             pending = pending_admin.get(user_id)
@@ -491,7 +530,51 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             lien_actuel = pending["liens"][pending["index"]]
             tranche = lien_actuel["tranche"]
-            nouveau_lien = retirer_lien(tranche)
+            num = pending["index"] + 1
+            total = len(pending["liens"])
+
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=(
+                    f"🔄 Lien {num}/{total} — Mauvais lien détecté !\n\n"
+                    f"Dans quelle tranche remettre ce lien ?\n"
+                    f"(ou 🗑️ Supprimer si le lien est mort)"
+                ),
+                reply_markup=get_keyboard_tranche(user_id)
+            )
+
+        # ===== DÉPLACER VERS TRANCHE =====
+        elif data.startswith("move"):
+            parts = data.split("|")
+            user_id = int(parts[1])
+            destination = parts[2]
+
+            pending = pending_admin.get(user_id)
+            if not pending:
+                await context.bot.send_message(chat_id=ADMIN_ID, text="⚠️ Commande introuvable ou expirée.")
+                return
+
+            lien_actuel = pending["liens"][pending["index"]]
+            tranche_actuelle = lien_actuel["tranche"]
+            lien = lien_actuel["lien"]
+
+            # Supprimer de la tranche actuelle
+            supprimer_lien_stock(tranche_actuelle, lien)
+
+            if destination == "delete":
+                action_text = "🗑️ Lien supprimé définitivement."
+            else:
+                # Remettre dans la bonne tranche
+                remettre_stock(destination, lien)
+                action_text = f"✅ Lien remis dans la tranche {tranches[destination]['label']}."
+
+            # Prendre le prochain lien de la même tranche
+            nouveau_lien = retirer_lien(tranche_actuelle)
 
             try:
                 await query.message.delete()
@@ -499,10 +582,10 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
             if nouveau_lien:
-                remettre_stock(tranche, lien_actuel["lien"])
-                pending["liens"][pending["index"]] = {"lien": nouveau_lien, "tranche": tranche}
+                pending["liens"][pending["index"]] = {"lien": nouveau_lien, "tranche": tranche_actuelle}
                 num = pending["index"] + 1
                 total = len(pending["liens"])
+
                 keyboard = [
                     [
                         InlineKeyboardButton("✅ Lien OK", callback_data=f"approve|{user_id}"),
@@ -510,76 +593,63 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ],
                     [InlineKeyboardButton("❌ Refuser paiement", callback_data=f"reject|{user_id}")]
                 ]
+
                 await context.bot.send_message(
                     chat_id=ADMIN_ID,
-                    text=f"🔄 Nouveau lien {num}/{total} :\n{nouveau_lien}",
+                    text=(
+                        f"{action_text}\n\n"
+                        f"🔗 Nouveau lien {num}/{total} à vérifier :\n{nouveau_lien}"
+                    ),
                     reply_markup=InlineKeyboardMarkup(keyboard)
                 )
             else:
-                # Pas de remplacement → on passe au lien suivant
-                pending["index"] += 1
+                # Plus de stock
                 liens_deja_valides = pending["valides"]
+                manquants = pending["total"] - len(liens_deja_valides)
 
-                if pending["index"] < len(pending["liens"]):
-                    prochain = pending["liens"][pending["index"]]
-                    num = pending["index"] + 1
-                    total = len(pending["liens"])
-                    keyboard = [
-                        [
-                            InlineKeyboardButton("✅ Lien OK", callback_data=f"approve|{user_id}"),
-                            InlineKeyboardButton("🔄 Mauvais lien", callback_data=f"badlink|{user_id}"),
-                        ],
-                        [InlineKeyboardButton("❌ Refuser paiement", callback_data=f"reject|{user_id}")]
+                await context.bot.send_message(
+                    chat_id=ADMIN_ID,
+                    text=(
+                        f"{action_text}\n\n"
+                        f"⚠️ Plus de stock pour cette tranche !\n"
+                        f"📦 Liens valides : {len(liens_deja_valides)}/{pending['total']}\n"
+                        f"❌ Manquants : {manquants}\n\nLe client a été prévenu."
+                    )
+                )
+
+                if liens_deja_valides:
+                    keyboard_liens = [
+                        [InlineKeyboardButton(f"🍟 Lien McDo {i+1}", url=l)]
+                        for i, l in enumerate(liens_deja_valides)
                     ]
+                    keyboard_liens.append([InlineKeyboardButton("🏪 Retour Boutique", callback_data="menu")])
                     await context.bot.send_message(
-                        chat_id=ADMIN_ID,
+                        chat_id=user_id,
                         text=(
-                            f"⚠️ Pas de remplacement, on passe au suivant.\n\n"
-                            f"🔗 Lien {num}/{total} à vérifier :\n{prochain['lien']}"
+                            f"🍟 *TA COMMANDE EST PARTIELLEMENT LIVRÉE*\n\n"
+                            f"✅ {len(liens_deja_valides)} lien(s) sur {pending['total']} disponibles.\n\n"
+                            f"😔 Désolé, {manquants} lien(s) n'étaient plus disponibles en stock.\n\n"
+                            f"Tu seras remboursé uniquement pour le(s) lien(s) manquant(s) et on t'offre un cadeau en compensation ! 🎁\n\n"
+                            f"Contacte le support : {SUPPORT_USERNAME}"
                         ),
-                        reply_markup=InlineKeyboardMarkup(keyboard)
+                        reply_markup=InlineKeyboardMarkup(keyboard_liens),
+                        parse_mode="Markdown"
                     )
                 else:
-                    manquants = pending["total"] - len(liens_deja_valides)
                     await context.bot.send_message(
-                        chat_id=ADMIN_ID,
+                        chat_id=user_id,
                         text=(
-                            f"⚠️ Fin de la commande.\n\n"
-                            f"📦 Liens valides : {len(liens_deja_valides)}/{pending['total']}\n"
-                            f"❌ Manquants : {manquants}"
+                            f"😔 Désolé, c'était le dernier lien disponible pour ta tranche, il n'était pas valide et il n'y en a plus en stock.\n\n"
+                            f"Tu seras remboursé uniquement pour le(s) lien(s) manquant(s) et on t'offre un cadeau en compensation ! 🎁\n\n"
+                            f"Contacte le support : {SUPPORT_USERNAME}"
                         )
                     )
-                    if liens_deja_valides:
-                        keyboard_liens = [
-                            [InlineKeyboardButton(f"🍟 Lien McDo {i+1}", url=l)]
-                            for i, l in enumerate(liens_deja_valides)
-                        ]
-                        keyboard_liens.append([InlineKeyboardButton("🏪 Retour Boutique", callback_data="menu")])
-                        await context.bot.send_message(
-                            chat_id=user_id,
-                            text=(
-                                f"🍟 *TA COMMANDE EST PARTIELLEMENT LIVRÉE*\n\n"
-                                f"✅ {len(liens_deja_valides)} lien(s) sur {pending['total']} disponibles.\n\n"
-                                f"😔 {manquants} lien(s) indisponibles en stock.\n\n"
-                                f"Tu seras remboursé et on t'offre un cadeau ! 🎁\n\n"
-                                f"Contacte le support : {SUPPORT_USERNAME}"
-                            ),
-                            reply_markup=InlineKeyboardMarkup(keyboard_liens),
-                            parse_mode="Markdown"
-                        )
-                    else:
-                        await context.bot.send_message(
-                            chat_id=user_id,
-                            text=(
-                                f"😔 Désolé, aucun lien valide disponible.\n\n"
-                                f"Tu seras remboursé et on t'offre un cadeau ! 🎁\n\n"
-                                f"Contacte le support : {SUPPORT_USERNAME}"
-                            )
-                        )
-                    pending_admin.pop(user_id, None)
-                    cart.pop(user_id, None)
-                    cart_timestamps.pop(user_id, None)
 
+                pending_admin.pop(user_id, None)
+                cart.pop(user_id, None)
+                cart_timestamps.pop(user_id, None)
+
+        # ===== REFUSER PAIEMENT =====
         elif data.startswith("reject"):
             user_id = data.split("|")[1]
             keyboard = [
@@ -760,7 +830,7 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("stock", cmd_stock))
     app.add_handler(CommandHandler("addstock", cmd_addstock))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown_message))
-    app.add_handler(CallbackQueryHandler(admin_actions, pattern=r"^(approve|reject|badlink|r1|r2|r3)\|"))
+    app.add_handler(CallbackQueryHandler(admin_actions, pattern=r"^(approve|reject|badlink|move|r1|r2|r3)\|"))
     app.add_handler(CallbackQueryHandler(handle))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
 
