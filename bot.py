@@ -745,13 +745,28 @@ async def envoyer_commande(context, user_id):
     ]
     keyboard_liens.append([InlineKeyboardButton("🏪 Retour Boutique", callback_data="menu")])
 
-    await context.bot.send_message(
-        chat_id=user_id,
-        text=(
+    manquants = total_demande - len(liens_valides)
+
+    if manquants == 0:
+        # Commande complète
+        msg = (
             f"🍟 *TA COMMANDE EST PRÊTE !*\n\n"
             f"Voici tes *{len(liens_valides)}* accès McDo ✅\n"
             f"Régale-toi bien et bon appétit ! 🍗🍟"
-        ) + "\n\n" + PROMO_MESSAGE,
+        )
+    else:
+        # Commande partielle
+        msg = (
+            f"🍟 *TA COMMANDE EST PARTIELLEMENT LIVRÉE*\n\n"
+            f"✅ {len(liens_valides)} lien(s) sur {total_demande} disponibles.\n\n"
+            f"😔 Désolé, {manquants} lien(s) n'étaient plus disponibles en stock.\n\n"
+            f"Tu seras remboursé uniquement pour le(s) lien(s) manquant(s) et on t'offre un cadeau en compensation ! 🎁\n\n"
+            f"Contacte le support : {SUPPORT_USERNAME}"
+        )
+
+    await context.bot.send_message(
+        chat_id=user_id,
+        text=msg + "\n\n" + PROMO_MESSAGE,
         reply_markup=InlineKeyboardMarkup(keyboard_liens),
         parse_mode="Markdown"
     )
