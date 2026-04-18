@@ -11,10 +11,13 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
 
 # ===== CONFIG =====
-BOT_TOKEN = os.environ.get("8792949268:AAFEzRs2f0X5MFC7rYsJ72kxDY2BXjCY0Zk")
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "6791451829"))
 PAYPAL_LINK = "https://www.paypal.me/FrankRoger149"
 SUPPORT_USERNAME = "@fr26ulka"
+
+if not BOT_TOKEN:
+    raise ValueError("❌ BOT_TOKEN manquant ! Ajoute-le dans les variables d'environnement Render.")
 
 # ===== STATES =====
 user_state = {}
@@ -43,7 +46,6 @@ cart = {}
 locks = {t: threading.Lock() for t in tranches}
 
 # ===== PENDING ADMIN =====
-# Format: {user_id: {"liens": [{"lien": ..., "tranche": ...}], "index": 0, "valides": [], "total": N}}
 pending_admin = {}
 
 # ===== PROMO MESSAGE =====
@@ -187,7 +189,7 @@ def remettre_stock(tranche, lien):
     with locks[tranche]:
         liens = lire_liens(tranche)
         if lien not in liens:
-            liens.append(lien)  # En fin de liste pour ne pas reprendre le même lien
+            liens.append(lien)
             with open(tranches[tranche]["file"], "w", encoding="utf-8") as f:
                 f.writelines(l + "\n" for l in liens)
 
@@ -445,7 +447,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     final_total = apply_discount(total, user_cart)
     remise = f"\n⚠️ Remise -10% (base {round(total, 2)}€)" if len(user_cart) >= 3 else ""
 
-    # Stocker les liens en attente de validation admin
     pending_admin[user_id] = {
         "liens": tous_liens,
         "index": 0,
@@ -490,7 +491,6 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
 
     try:
-        # ===== LIEN OK =====
         if data.startswith("approve"):
             user_id = int(data.split("|")[1])
             pending = pending_admin.get(user_id)
@@ -499,12 +499,10 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(chat_id=ADMIN_ID, text="⚠️ Commande introuvable ou expirée.")
                 return
 
-            # Marquer le lien actuel comme valide
             lien_actuel = pending["liens"][pending["index"]]
             pending["valides"].append(lien_actuel["lien"])
             pending["index"] += 1
 
-            # S'il reste des liens à vérifier
             if pending["index"] < len(pending["liens"]):
                 prochain = pending["liens"][pending["index"]]
                 num = pending["index"] + 1
@@ -535,14 +533,12 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
 
             else:
-                # Tous les liens validés → envoyer au client
                 await envoyer_commande(context, user_id)
                 try:
                     await query.message.delete()
                 except Exception:
                     pass
 
-        # ===== MAUVAIS LIEN =====
         elif data.startswith("badlink"):
             user_id = int(data.split("|")[1])
             pending = pending_admin.get(user_id)
@@ -554,13 +550,10 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lien_actuel = pending["liens"][pending["index"]]
             tranche = lien_actuel["tranche"]
 
-            # Chercher un nouveau lien AVANT de remettre le mauvais en stock
             nouveau_lien = retirer_lien(tranche)
 
             if nouveau_lien:
-                # Le mauvais lien est remis dans la bonne tranche en fin de liste
                 remettre_stock(tranche, lien_actuel["lien"])
-                # Remplacer dans la liste
                 pending["liens"][pending["index"]] = {"lien": nouveau_lien, "tranche": tranche}
                 num = pending["index"] + 1
                 total = len(pending["liens"])
@@ -582,14 +575,11 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 await context.bot.send_message(
                     chat_id=ADMIN_ID,
-                    text=(
-                        f"🔄 Nouveau lien {num}/{total} :\n{nouveau_lien}"
-                    ),
+                    text=f"🔄 Nouveau lien {num}/{total} :\n{nouveau_lien}",
                     reply_markup=InlineKeyboardMarkup(keyboard)
                 )
 
             else:
-                # Plus de stock pour cette tranche
                 try:
                     await query.message.delete()
                 except Exception:
@@ -640,7 +630,6 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 cart.pop(user_id, None)
                 cart_timestamps.pop(user_id, None)
 
-        # ===== REFUSER PAIEMENT =====
         elif data.startswith("reject"):
             user_id = data.split("|")[1]
 
@@ -671,7 +660,6 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "r3": "Pas de paiement"
             }
 
-            # Remettre les liens en stock
             pending = pending_admin.pop(user_id, None)
             if pending:
                 for item in pending["liens"]:
@@ -735,7 +723,6 @@ async def envoyer_commande(context, user_id):
     cart_timestamps.pop(user_id, None)
     warned_users.discard(user_id)
 
-    # ===== FIDÉLITÉ =====
     commandes_count[user_id] = commandes_count.get(user_id, 0) + 1
     count = commandes_count[user_id]
 
