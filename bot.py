@@ -582,6 +582,7 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
             if nouveau_lien:
+                # On remplace le lien actuel par le nouveau
                 pending["liens"][pending["index"]] = {"lien": nouveau_lien, "tranche": tranche_actuelle}
                 num = pending["index"] + 1
                 total = len(pending["liens"])
@@ -603,51 +604,79 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=InlineKeyboardMarkup(keyboard)
                 )
             else:
-                # Plus de stock
-                liens_deja_valides = pending["valides"]
-                manquants = pending["total"] - len(liens_deja_valides)
-
+                # Plus de stock pour ce lien → on passe au lien suivant de la commande
                 await context.bot.send_message(
                     chat_id=ADMIN_ID,
-                    text=(
-                        f"{action_text}\n\n"
-                        f"⚠️ Plus de stock pour cette tranche !\n"
-                        f"📦 Liens valides : {len(liens_deja_valides)}/{pending['total']}\n"
-                        f"❌ Manquants : {manquants}\n\nLe client a été prévenu."
-                    )
+                    text=f"{action_text}\n\n⚠️ Plus de stock pour cette tranche, on passe au lien suivant."
                 )
+                pending["index"] += 1
 
-                if liens_deja_valides:
-                    keyboard_liens = [
-                        [InlineKeyboardButton(f"🍟 Lien McDo {i+1}", url=l)]
-                        for i, l in enumerate(liens_deja_valides)
+                if pending["index"] < len(pending["liens"]):
+                    # Il reste des liens à vérifier dans la commande
+                    prochain = pending["liens"][pending["index"]]
+                    num = pending["index"] + 1
+                    total = len(pending["liens"])
+
+                    keyboard = [
+                        [
+                            InlineKeyboardButton("✅ Lien OK", callback_data=f"approve|{user_id}"),
+                            InlineKeyboardButton("🔄 Mauvais lien", callback_data=f"badlink|{user_id}"),
+                        ],
+                        [InlineKeyboardButton("❌ Refuser paiement", callback_data=f"reject|{user_id}")]
                     ]
-                    keyboard_liens.append([InlineKeyboardButton("🏪 Retour Boutique", callback_data="menu")])
+
                     await context.bot.send_message(
-                        chat_id=user_id,
+                        chat_id=ADMIN_ID,
                         text=(
-                            f"🍟 *TA COMMANDE EST PARTIELLEMENT LIVRÉE*\n\n"
-                            f"✅ {len(liens_deja_valides)} lien(s) sur {pending['total']} disponibles.\n\n"
-                            f"😔 Désolé, {manquants} lien(s) n'étaient plus disponibles en stock.\n\n"
-                            f"Tu seras remboursé uniquement pour le(s) lien(s) manquant(s) et on t'offre un cadeau en compensation ! 🎁\n\n"
-                            f"Contacte le support : {SUPPORT_USERNAME}"
+                            f"🔗 Lien {num}/{total} à vérifier :\n{prochain['lien']}"
                         ),
-                        reply_markup=InlineKeyboardMarkup(keyboard_liens),
-                        parse_mode="Markdown"
+                        reply_markup=InlineKeyboardMarkup(keyboard)
                     )
                 else:
+                    # Tous les liens ont été traités → on envoie ce qui est bon
+                    liens_deja_valides = pending["valides"]
+                    manquants = pending["total"] - len(liens_deja_valides)
+
                     await context.bot.send_message(
-                        chat_id=user_id,
+                        chat_id=ADMIN_ID,
                         text=(
-                            f"😔 Désolé, c'était le dernier lien disponible pour ta tranche, il n'était pas valide et il n'y en a plus en stock.\n\n"
-                            f"Tu seras remboursé uniquement pour le(s) lien(s) manquant(s) et on t'offre un cadeau en compensation ! 🎁\n\n"
-                            f"Contacte le support : {SUPPORT_USERNAME}"
+                            f"⚠️ Fin de la commande.\n"
+                            f"📦 Liens valides : {len(liens_deja_valides)}/{pending['total']}\n"
+                            f"❌ Manquants : {manquants}\n\nLe client a été prévenu."
                         )
                     )
 
-                pending_admin.pop(user_id, None)
-                cart.pop(user_id, None)
-                cart_timestamps.pop(user_id, None)
+                    if liens_deja_valides:
+                        keyboard_liens = [
+                            [InlineKeyboardButton(f"🍟 Lien McDo {i+1}", url=l)]
+                            for i, l in enumerate(liens_deja_valides)
+                        ]
+                        keyboard_liens.append([InlineKeyboardButton("🏪 Retour Boutique", callback_data="menu")])
+                        await context.bot.send_message(
+                            chat_id=user_id,
+                            text=(
+                                f"🍟 *TA COMMANDE EST PARTIELLEMENT LIVRÉE*\n\n"
+                                f"✅ {len(liens_deja_valides)} lien(s) sur {pending['total']} disponibles.\n\n"
+                                f"😔 Désolé, {manquants} lien(s) n'étaient plus disponibles en stock.\n\n"
+                                f"Tu seras remboursé uniquement pour le(s) lien(s) manquant(s) et on t'offre un cadeau en compensation ! 🎁\n\n"
+                                f"Contacte le support : {SUPPORT_USERNAME}"
+                            ),
+                            reply_markup=InlineKeyboardMarkup(keyboard_liens),
+                            parse_mode="Markdown"
+                        )
+                    else:
+                        await context.bot.send_message(
+                            chat_id=user_id,
+                            text=(
+                                f"😔 Désolé, aucun lien valide disponible pour ta commande.\n\n"
+                                f"Tu seras remboursé et on t'offre un cadeau en compensation ! 🎁\n\n"
+                                f"Contacte le support : {SUPPORT_USERNAME}"
+                            )
+                        )
+
+                    pending_admin.pop(user_id, None)
+                    cart.pop(user_id, None)
+                    cart_timestamps.pop(user_id, None)
 
         # ===== REFUSER PAIEMENT =====
         elif data.startswith("reject"):
