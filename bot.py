@@ -11,7 +11,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
 
 # ===== CONFIG =====
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
+BOT_TOKEN = os.environ.get("8792949268:AAFEzRs2f0X5MFC7rYsJ72kxDY2BXjCY0Zk")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "6791451829"))
 PAYPAL_LINK = "https://www.paypal.me/FrankRoger149"
 SUPPORT_USERNAME = "@fr26ulka"
