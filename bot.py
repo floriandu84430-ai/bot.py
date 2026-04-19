@@ -746,9 +746,15 @@ def capturer_barcode(lien):
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
         options.add_argument("--window-size=800,600")
-        options.binary_location = "/usr/bin/chromium"
+        # Chercher chromium dans plusieurs emplacements possibles
+        import shutil
+        chromium_path = shutil.which("chromium") or shutil.which("chromium-browser") or "/usr/bin/chromium"
+        options.binary_location = chromium_path
 
-        driver = webdriver.Chrome(options=options)
+        from selenium.webdriver.chrome.service import Service
+        chromedriver_path = shutil.which("chromedriver") or "/usr/bin/chromedriver"
+        service = Service(chromedriver_path)
+        driver = webdriver.Chrome(service=service, options=options)
         driver.get(lien)
 
         # Attendre que le barcode apparaisse
