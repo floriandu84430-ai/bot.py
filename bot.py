@@ -2,9 +2,12 @@ import os
 import time
 import threading
 import logging
+from io import BytesIO
 from supabase import create_client, Client
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+import qrcode
+from PIL import Image, ImageDraw, ImageFont
 
 # ===== LOGS =====
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
@@ -730,6 +733,35 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logging.error(e)
 
+# ===== GÉNÉRER QR CODE =====
+def generer_qr(lien, label):
+    qr = qrcode.QRCode(version=1, box_size=10, border=5)
+    qr.add_data(lien)
+    qr.make(fit=True)
+    qr_img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
+
+    width, height = qr_img.size
+    new_height = height + 80
+    final_img = Image.new("RGB", (width, new_height), "white")
+    final_img.paste(qr_img, (0, 0))
+
+    draw = ImageDraw.Draw(final_img)
+    try:
+        font = ImageFont.truetype("arial.ttf", 28)
+    except:
+        font = ImageFont.load_default()
+
+    text = f"COMPTE MCDO : {label}"
+    text_bbox = draw.textbbox((0, 0), text, font=font)
+    text_width = text_bbox[2] - text_bbox[0]
+    draw.text(((width - text_width) / 2, height + 10), text, fill=(255, 0, 0), font=font)
+
+    bio = BytesIO()
+    bio.name = "qr_mcdo.png"
+    final_img.save(bio, "PNG")
+    bio.seek(0)
+    return bio
+
 # ===== ENVOYER COMMANDE =====
 async def envoyer_commande(context, user_id):
     pending = pending_admin.pop(user_id, None)
@@ -738,24 +770,16 @@ async def envoyer_commande(context, user_id):
 
     liens_valides = pending["valides"]
     total_demande = pending["total"]
-
-    keyboard_liens = [
-        [InlineKeyboardButton(f"🍟 Lien McDo {i+1}", url=l)]
-        for i, l in enumerate(liens_valides)
-    ]
-    keyboard_liens.append([InlineKeyboardButton("🏪 Retour Boutique", callback_data="menu")])
-
     manquants = total_demande - len(liens_valides)
 
     if manquants == 0:
-        # Commande complète
         msg = (
             f"🍟 *TA COMMANDE EST PRÊTE !*\n\n"
-            f"Voici tes *{len(liens_valides)}* accès McDo ✅\n"
-            f"Régale-toi bien et bon appétit ! 🍗🍟"
+            f"Voici tes *{len(liens_valides)}* accès McDo sous forme de QR Codes ✅\n"
+            f"Scanne chaque QR code pour accéder à tes points !\n\n"
+            f"🍗🍟 Bon appétit !"
         )
     else:
-        # Commande partielle
         msg = (
             f"🍟 *TA COMMANDE EST PARTIELLEMENT LIVRÉE*\n\n"
             f"✅ {len(liens_valides)} lien(s) sur {total_demande} disponibles.\n\n"
@@ -766,8 +790,24 @@ async def envoyer_commande(context, user_id):
 
     await context.bot.send_message(
         chat_id=user_id,
-        text=msg + "\n\n" + PROMO_MESSAGE,
-        reply_markup=InlineKeyboardMarkup(keyboard_liens),
+        text=msg,
+        parse_mode="Markdown"
+    )
+
+    # Envoyer un QR code par lien
+    for i, lien in enumerate(liens_valides):
+        tranche = pending["liens"][i]["tranche"] if i < len(pending["liens"]) else list(tranches.keys())[0]
+        label = tranches.get(tranche, {}).get("label", "McDo")
+        qr_bio = generer_qr(lien, label)
+        await context.bot.send_photo(
+            chat_id=user_id,
+            photo=qr_bio,
+            caption=f"🍟 QR Code {i+1}/{len(liens_valides)}"
+        )
+
+    await context.bot.send_message(
+        chat_id=user_id,
+        text=PROMO_MESSAGE,
         parse_mode="Markdown"
     )
 
