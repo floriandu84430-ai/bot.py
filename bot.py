@@ -6,7 +6,11 @@ from io import BytesIO
 from supabase import create_client, Client
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
-import qrcode
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 from PIL import Image, ImageDraw, ImageFont
 
 # ===== LOGS =====
@@ -733,8 +737,42 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logging.error(e)
 
-# ===== GÉNÉRER QR CODE =====
-def generer_qr(lien, label):
+# ===== CAPTURER BARCODE =====
+def capturer_barcode(lien):
+    try:
+        options = Options()
+        options.add_argument("--headless")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--window-size=800,600")
+        options.binary_location = "/usr/bin/chromium"
+
+        driver = webdriver.Chrome(options=options)
+        driver.get(lien)
+
+        # Attendre que le barcode apparaisse
+        WebDriverWait(driver, 10).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "canvas, svg, img"))
+        )
+
+        import time
+        time.sleep(3)
+
+        # Prendre une capture d'écran
+        screenshot = driver.get_screenshot_as_png()
+        driver.quit()
+
+        bio = BytesIO(screenshot)
+        bio.seek(0)
+        return bio
+
+    except Exception as e:
+        logging.error(f"Erreur capture barcode: {e}")
+        return None
+
+def generer_qr_fallback(lien, label):
+    # Générer le QR code (pour scanner depuis téléphone)
     qr = qrcode.QRCode(
         version=1,
         error_correction=qrcode.constants.ERROR_CORRECT_H,
@@ -759,13 +797,11 @@ def generer_qr(lien, label):
         font_big = ImageFont.load_default()
         font_small = ImageFont.load_default()
 
-    # Ligne 1 : COMPTE MCDO
-    text1 = "🍟 COMPTE MCDO"
+    text1 = "COMPTE MCDO"
     text1_bbox = draw.textbbox((0, 0), text1, font=font_big)
     text1_width = text1_bbox[2] - text1_bbox[0]
     draw.text(((width - text1_width) / 2, height + 10), text1, fill=(0, 0, 0), font=font_big)
 
-    # Ligne 2 : Tranche de points
     text2 = label
     text2_bbox = draw.textbbox((0, 0), text2, font=font_small)
     text2_width = text2_bbox[2] - text2_bbox[0]
@@ -809,16 +845,31 @@ async def envoyer_commande(context, user_id):
         parse_mode="Markdown"
     )
 
-    # Envoyer un QR code par lien
+    # Envoyer le barcode pour chaque lien
     for i, lien in enumerate(liens_valides):
         tranche = pending["liens"][i]["tranche"] if i < len(pending["liens"]) else list(tranches.keys())[0]
         label = tranches.get(tranche, {}).get("label", "McDo")
-        qr_bio = generer_qr(lien, label)
-        await context.bot.send_photo(
-            chat_id=user_id,
-            photo=qr_bio,
-            caption=f"🍟 QR Code {i+1}/{len(liens_valides)}"
-        )
+
+        # Essayer de capturer le barcode avec Selenium
+        barcode_bio = capturer_barcode(lien)
+
+        if barcode_bio:
+            await context.bot.send_photo(
+                chat_id=user_id,
+                photo=barcode_bio,
+                caption=f"🍟 Code McDo {i+1}/{len(liens_valides)} — {label}
+
+📱 Présente ce code à la borne !"
+            )
+        else:
+            # Fallback : envoyer le lien si la capture échoue
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"🍟 Accès McDo {i+1}/{len(liens_valides)} — {label}",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🍟 Accéder à mon code", url=lien)]
+                ])
+            )
 
     await context.bot.send_message(
         chat_id=user_id,
