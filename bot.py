@@ -735,26 +735,41 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ===== GÉNÉRER QR CODE =====
 def generer_qr(lien, label):
-    qr = qrcode.QRCode(version=1, box_size=10, border=5)
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_H,
+        box_size=15,
+        border=6
+    )
     qr.add_data(lien)
     qr.make(fit=True)
     qr_img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
 
     width, height = qr_img.size
-    new_height = height + 80
+    padding = 100
+    new_height = height + padding
     final_img = Image.new("RGB", (width, new_height), "white")
     final_img.paste(qr_img, (0, 0))
 
     draw = ImageDraw.Draw(final_img)
     try:
-        font = ImageFont.truetype("arial.ttf", 28)
+        font_big = ImageFont.truetype("arial.ttf", 36)
+        font_small = ImageFont.truetype("arial.ttf", 24)
     except:
-        font = ImageFont.load_default()
+        font_big = ImageFont.load_default()
+        font_small = ImageFont.load_default()
 
-    text = f"COMPTE MCDO : {label}"
-    text_bbox = draw.textbbox((0, 0), text, font=font)
-    text_width = text_bbox[2] - text_bbox[0]
-    draw.text(((width - text_width) / 2, height + 10), text, fill=(255, 0, 0), font=font)
+    # Ligne 1 : COMPTE MCDO
+    text1 = "🍟 COMPTE MCDO"
+    text1_bbox = draw.textbbox((0, 0), text1, font=font_big)
+    text1_width = text1_bbox[2] - text1_bbox[0]
+    draw.text(((width - text1_width) / 2, height + 10), text1, fill=(0, 0, 0), font=font_big)
+
+    # Ligne 2 : Tranche de points
+    text2 = label
+    text2_bbox = draw.textbbox((0, 0), text2, font=font_small)
+    text2_width = text2_bbox[2] - text2_bbox[0]
+    draw.text(((width - text2_width) / 2, height + 55), text2, fill=(220, 0, 0), font=font_small)
 
     bio = BytesIO()
     bio.name = "qr_mcdo.png"
