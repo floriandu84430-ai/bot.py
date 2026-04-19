@@ -858,8 +858,6 @@ async def envoyer_commande(context, user_id):
                 chat_id=user_id,
                 photo=barcode_bio,
                 caption="Code McDo - Presente ce code a la borne !",
-
-📱 Présente ce code à la borne !"
             )
         else:
             # Fallback : envoyer le lien si la capture échoue
