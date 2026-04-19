@@ -1,2 +1,4 @@
 python-telegram-bot[job-queue]==21.3
-supabase>=2.10.0
+supabase==2.4.0
+qrcode==7.4.2
+pillow==10.3.0
