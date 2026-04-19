@@ -857,7 +857,7 @@ async def envoyer_commande(context, user_id):
             await context.bot.send_photo(
                 chat_id=user_id,
                 photo=barcode_bio,
-                caption=f"🍟 Code McDo {i+1}/{len(liens_valides)} — {label}
+                caption="Code McDo - Presente ce code a la borne !",
 
 📱 Présente ce code à la borne !"
             )
