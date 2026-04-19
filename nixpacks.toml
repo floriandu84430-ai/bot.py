@@ -1,2 +1,8 @@
 [phases.setup]
-nixPkgs = ["chromium", "chromiumDrv"]
+nixPkgs = ["chromium"]
+
+[phases.build]
+cmds = ["pip install -r requirements.txt"]
+
+[start]
+cmd = "python bot.py"
