@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.WARNING, format="%(message)s")
 # ===== CONFIG =====
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "6791451829"))
-PAYPAL_LINK = "https://www.paypal.me/FrankRoger149"
+PAYPAL_LINK = "https://www.paypal.com/paypalme/FrankRoger149"
 SUPPORT_USERNAME = "@fr26ulka"
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -741,11 +741,17 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def capturer_barcode(lien):
     try:
         options = Options()
-        options.add_argument("--headless")
+        options.add_argument("--headless=new")
         options.add_argument("--no-sandbox")
+        options.add_argument("--disable-setuid-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
         options.add_argument("--window-size=800,600")
+        options.add_argument("--disable-software-rasterizer")
+        options.add_argument("--disable-extensions")
+        options.add_argument("--single-process")
+        options.add_argument("--memory-pressure-off")
+        options.add_argument("--max_old_space_size=512")
         # Chercher chromium dans plusieurs emplacements possibles
         import shutil
         chromium_path = shutil.which("chromium") or shutil.which("chromium-browser") or "/usr/bin/chromium"
