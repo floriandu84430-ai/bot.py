@@ -1,5 +1,2 @@
 python-telegram-bot[job-queue]==21.3
 supabase==2.7.4
-qrcode[pil]
-pillow
-selenium
