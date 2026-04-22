@@ -6,12 +6,6 @@ from io import BytesIO
 from supabase import create_client, Client
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from PIL import Image, ImageDraw, ImageFont
 
 # ===== LOGS =====
 logging.basicConfig(level=logging.WARNING, format="%(message)s")
@@ -99,26 +93,14 @@ def retirer_lien(tranche):
         return row["lien"]
 
 def supprimer_lien_stock(tranche, lien):
-    """Supprime définitivement un lien du stock d'une tranche"""
     with stock_lock:
         supabase.table("stock").delete().eq("tranche", tranche).eq("lien", lien).execute()
 
 def remettre_stock(tranche, lien):
-    """Remet un lien dans une tranche (utilisé pour annulations/remboursements)"""
     with stock_lock:
         res = supabase.table("stock").select("id").eq("tranche", tranche).eq("lien", lien).execute()
         if not res.data:
             supabase.table("stock").insert({"tranche": tranche, "lien": lien}).execute()
-
-def deplacer_lien(ancienne_tranche, nouvelle_tranche, lien):
-    """Déplace un lien d'une tranche vers une autre"""
-    with stock_lock:
-        # Supprimer de l'ancienne tranche
-        supabase.table("stock").delete().eq("tranche", ancienne_tranche).eq("lien", lien).execute()
-        # Ajouter dans la nouvelle tranche si pas déjà présent
-        res = supabase.table("stock").select("id").eq("tranche", nouvelle_tranche).eq("lien", lien).execute()
-        if not res.data:
-            supabase.table("stock").insert({"tranche": nouvelle_tranche, "lien": lien}).execute()
 
 def ajouter_liens(tranche, nouveaux_liens):
     with stock_lock:
@@ -139,6 +121,11 @@ def apply_discount(total, user_cart):
 
 def touch_cart(user_id):
     cart_timestamps[user_id] = time.time()
+    warned_users.discard(user_id)
+
+def freeze_cart(user_id):
+    """Gèle le timer du panier quand le client envoie son screenshot"""
+    cart_timestamps.pop(user_id, None)
     warned_users.discard(user_id)
 
 def get_timer_text(user_id):
@@ -163,7 +150,6 @@ async def safe_edit(query, text, reply_markup=None):
 
 # ===== BOUTONS TRANCHE =====
 def get_keyboard_tranche(user_id):
-    """Retourne le clavier de choix de tranche pour remettre un mauvais lien"""
     keyboard = [
         [
             InlineKeyboardButton("25-49 pts", callback_data=f"move|{user_id}|25-49"),
@@ -188,32 +174,15 @@ async def cleanup_carts(context):
     now = time.time()
     WARN_AT = 8 * 60
     TIMEOUT = 10 * 60
-    MAX_SCREENSHOT_WAIT = 2 * 60 * 60
 
     for user_id in list(cart.keys()):
-        last_seen = cart_timestamps.get(user_id, 0)
-        elapsed = now - last_seen
+        last_seen = cart_timestamps.get(user_id)
 
-        if user_state.get(user_id) == "awaiting_screenshot":
-            if elapsed > MAX_SCREENSHOT_WAIT:
-                user_cart = cart.pop(user_id, {})
-                cart_timestamps.pop(user_id, None)
-                user_state.pop(user_id, None)
-                warned_users.discard(user_id)
-                for t, d in user_cart.items():
-                    for lien in d["items"]:
-                        remettre_stock(t, lien)
-                try:
-                    await context.bot.send_message(
-                        chat_id=user_id,
-                        text=(
-                            "⏳ Ta commande en attente a expiré (délai de 2h dépassé).\n\n"
-                            f"Contacte-moi si tu as déjà payé : {SUPPORT_USERNAME}"
-                        )
-                    )
-                except Exception:
-                    pass
+        # BUG FIX : si le timer est gelé (screenshot envoyé), on ne touche pas au panier
+        if last_seen is None:
             continue
+
+        elapsed = now - last_seen
 
         if elapsed > TIMEOUT:
             user_cart = cart.pop(user_id, {})
@@ -475,8 +444,13 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         caption=caption,
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-    await update.message.reply_text("✅ Reçu ! En attente validation.")
-    user_state[user_id] = None
+
+    # BUG FIX : on gèle le timer et on met l'état à "en_validation"
+    # Le panier ne sera plus supprimé automatiquement
+    freeze_cart(user_id)
+    user_state[user_id] = "en_validation"
+
+    await update.message.reply_text("✅ Reçu ! En attente de validation par l'admin.")
 
 # ===== ADMIN CALLBACK =====
 async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -535,8 +509,6 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(chat_id=ADMIN_ID, text="⚠️ Commande introuvable ou expirée.")
                 return
 
-            lien_actuel = pending["liens"][pending["index"]]
-            tranche = lien_actuel["tranche"]
             num = pending["index"] + 1
             total = len(pending["liens"])
 
@@ -570,17 +542,14 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
             tranche_actuelle = lien_actuel["tranche"]
             lien = lien_actuel["lien"]
 
-            # Supprimer de la tranche actuelle
             supprimer_lien_stock(tranche_actuelle, lien)
 
             if destination == "delete":
                 action_text = "🗑️ Lien supprimé définitivement."
             else:
-                # Remettre dans la bonne tranche
                 remettre_stock(destination, lien)
                 action_text = f"✅ Lien remis dans la tranche {tranches[destination]['label']}."
 
-            # Prendre le prochain lien de la même tranche
             nouveau_lien = retirer_lien(tranche_actuelle)
 
             try:
@@ -589,7 +558,6 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pass
 
             if nouveau_lien:
-                # On remplace le lien actuel par le nouveau
                 pending["liens"][pending["index"]] = {"lien": nouveau_lien, "tranche": tranche_actuelle}
                 num = pending["index"] + 1
                 total = len(pending["liens"])
@@ -611,7 +579,6 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=InlineKeyboardMarkup(keyboard)
                 )
             else:
-                # Plus de stock pour ce lien → on passe au lien suivant de la commande
                 await context.bot.send_message(
                     chat_id=ADMIN_ID,
                     text=f"{action_text}\n\n⚠️ Plus de stock pour cette tranche, on passe au lien suivant."
@@ -619,7 +586,6 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pending["index"] += 1
 
                 if pending["index"] < len(pending["liens"]):
-                    # Il reste des liens à vérifier dans la commande
                     prochain = pending["liens"][pending["index"]]
                     num = pending["index"] + 1
                     total = len(pending["liens"])
@@ -634,13 +600,10 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                     await context.bot.send_message(
                         chat_id=ADMIN_ID,
-                        text=(
-                            f"🔗 Lien {num}/{total} à vérifier :\n{prochain['lien']}"
-                        ),
+                        text=f"🔗 Lien {num}/{total} à vérifier :\n{prochain['lien']}",
                         reply_markup=InlineKeyboardMarkup(keyboard)
                     )
                 else:
-                    # Tous les liens ont été traités → on envoie ce qui est bon
                     liens_deja_valides = pending["valides"]
                     manquants = pending["total"] - len(liens_deja_valides)
 
@@ -684,6 +647,7 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pending_admin.pop(user_id, None)
                     cart.pop(user_id, None)
                     cart_timestamps.pop(user_id, None)
+                    user_state.pop(user_id, None)
 
         # ===== REFUSER PAIEMENT =====
         elif data.startswith("reject"):
@@ -711,10 +675,12 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "r2": "Montant incorrect",
                 "r3": "Pas de paiement"
             }
+            # BUG FIX : on remet les liens en stock lors du refus
             pending = pending_admin.pop(user_id, None)
             if pending:
                 for item in pending["liens"]:
                     remettre_stock(item["tranche"], item["lien"])
+
             await context.bot.send_message(
                 chat_id=user_id,
                 text=(
@@ -728,6 +694,8 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             cart.pop(user_id, None)
             cart_timestamps.pop(user_id, None)
+            user_state.pop(user_id, None)
+
             try:
                 await query.message.delete()
             except Exception:
@@ -736,94 +704,6 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         logging.error(e)
-
-# ===== CAPTURER BARCODE =====
-def capturer_barcode(lien):
-    try:
-        options = Options()
-        options.add_argument("--headless=new")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-setuid-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--disable-gpu")
-        options.add_argument("--window-size=800,600")
-        options.add_argument("--disable-software-rasterizer")
-        options.add_argument("--disable-extensions")
-        options.add_argument("--single-process")
-        options.add_argument("--memory-pressure-off")
-        options.add_argument("--max_old_space_size=512")
-        # Chercher chromium dans plusieurs emplacements possibles
-        import shutil
-        chromium_path = shutil.which("chromium") or shutil.which("chromium-browser") or "/usr/bin/chromium"
-        options.binary_location = chromium_path
-
-        from selenium.webdriver.chrome.service import Service
-        chromedriver_path = shutil.which("chromedriver") or "/usr/bin/chromedriver"
-        service = Service(chromedriver_path)
-        driver = webdriver.Chrome(service=service, options=options)
-        driver.get(lien)
-
-        # Attendre que le barcode apparaisse
-        WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.CSS_SELECTOR, "canvas, svg, img"))
-        )
-
-        import time
-        time.sleep(3)
-
-        # Prendre une capture d'écran
-        screenshot = driver.get_screenshot_as_png()
-        driver.quit()
-
-        bio = BytesIO(screenshot)
-        bio.seek(0)
-        return bio
-
-    except Exception as e:
-        logging.error(f"Erreur capture barcode: {e}")
-        return None
-
-def generer_qr_fallback(lien, label):
-    # Générer le QR code (pour scanner depuis téléphone)
-    qr = qrcode.QRCode(
-        version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_H,
-        box_size=15,
-        border=6
-    )
-    qr.add_data(lien)
-    qr.make(fit=True)
-    qr_img = qr.make_image(fill_color="black", back_color="white").convert("RGB")
-
-    width, height = qr_img.size
-    padding = 100
-    new_height = height + padding
-    final_img = Image.new("RGB", (width, new_height), "white")
-    final_img.paste(qr_img, (0, 0))
-
-    draw = ImageDraw.Draw(final_img)
-    try:
-        font_big = ImageFont.truetype("arial.ttf", 36)
-        font_small = ImageFont.truetype("arial.ttf", 24)
-    except:
-        font_big = ImageFont.load_default()
-        font_small = ImageFont.load_default()
-
-    text1 = "COMPTE MCDO"
-    text1_bbox = draw.textbbox((0, 0), text1, font=font_big)
-    text1_width = text1_bbox[2] - text1_bbox[0]
-    draw.text(((width - text1_width) / 2, height + 10), text1, fill=(0, 0, 0), font=font_big)
-
-    text2 = label
-    text2_bbox = draw.textbbox((0, 0), text2, font=font_small)
-    text2_width = text2_bbox[2] - text2_bbox[0]
-    draw.text(((width - text2_width) / 2, height + 55), text2, fill=(220, 0, 0), font=font_small)
-
-    bio = BytesIO()
-    bio.name = "qr_mcdo.png"
-    final_img.save(bio, "PNG")
-    bio.seek(0)
-    return bio
 
 # ===== ENVOYER COMMANDE =====
 async def envoyer_commande(context, user_id):
@@ -837,49 +717,33 @@ async def envoyer_commande(context, user_id):
 
     if manquants == 0:
         msg = (
-            f"🍟 *TA COMMANDE EST PRÊTE !*\n\n"
-            f"Voici tes *{len(liens_valides)}* accès McDo sous forme de QR Codes ✅\n"
-            f"Scanne chaque QR code pour accéder à tes points !\n\n"
-            f"🍗🍟 Bon appétit !"
+            f"🍟 *TA COMMANDE EST PRETE !*\n\n"
+            f"Voici tes *{len(liens_valides)}* accès McDo ✅\n\n"
+            f"Clique sur le bouton, ouvre le lien dans ton navigateur et présente le code barre à la borne !\n\n"
+            f"Bon appétit ! 🍗🍟"
         )
     else:
         msg = (
             f"🍟 *TA COMMANDE EST PARTIELLEMENT LIVRÉE*\n\n"
             f"✅ {len(liens_valides)} lien(s) sur {total_demande} disponibles.\n\n"
-            f"😔 Désolé, {manquants} lien(s) n'étaient plus disponibles en stock.\n\n"
+            f"Désolé, {manquants} lien(s) n'étaient plus disponibles en stock.\n\n"
             f"Tu seras remboursé uniquement pour le(s) lien(s) manquant(s) et on t'offre un cadeau en compensation ! 🎁\n\n"
             f"Contacte le support : {SUPPORT_USERNAME}"
         )
 
+    keyboard_liens = [
+        [InlineKeyboardButton(f"🍟 Mon code McDo {i+1}", url=l)]
+        for i, l in enumerate(liens_valides)
+    ]
+    keyboard_liens.append([InlineKeyboardButton("🏪 Retour Boutique", callback_data="menu")])
+
+    # BUG FIX : PROMO_MESSAGE envoyé une seule fois
     await context.bot.send_message(
         chat_id=user_id,
         text=msg,
+        reply_markup=InlineKeyboardMarkup(keyboard_liens),
         parse_mode="Markdown"
     )
-
-    # Envoyer le barcode pour chaque lien
-    for i, lien in enumerate(liens_valides):
-        tranche = pending["liens"][i]["tranche"] if i < len(pending["liens"]) else list(tranches.keys())[0]
-        label = tranches.get(tranche, {}).get("label", "McDo")
-
-        # Essayer de capturer le barcode avec Selenium
-        barcode_bio = capturer_barcode(lien)
-
-        if barcode_bio:
-            await context.bot.send_photo(
-                chat_id=user_id,
-                photo=barcode_bio,
-                caption="Code McDo - Presente ce code a la borne !",
-            )
-        else:
-            # Fallback : envoyer le lien si la capture échoue
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=f"🍟 Accès McDo {i+1}/{len(liens_valides)} — {label}",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🍟 Accéder à mon code", url=lien)]
-                ])
-            )
 
     await context.bot.send_message(
         chat_id=user_id,
@@ -890,6 +754,7 @@ async def envoyer_commande(context, user_id):
     cart.pop(user_id, None)
     cart_timestamps.pop(user_id, None)
     warned_users.discard(user_id)
+    user_state.pop(user_id, None)
 
     commandes_count[user_id] = commandes_count.get(user_id, 0) + 1
     count = commandes_count[user_id]
