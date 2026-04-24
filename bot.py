@@ -717,9 +717,10 @@ async def envoyer_commande(context, user_id):
 
     if manquants == 0:
         msg = (
-            f"🍟 *TA COMMANDE EST PRETE !*\n\n"
+            f"🍟 *TA COMMANDE EST PRÊTE !*\n\n"
             f"Voici tes *{len(liens_valides)}* accès McDo ✅\n\n"
-            f"Clique sur le bouton, ouvre le lien dans ton navigateur et présente le code barre à la borne !\n\n"
+            f"👇 Clique sur le bouton ci-dessous\n"
+            f"Ouvre la page et présente le code barre à la borne McDo !\n\n"
             f"Bon appétit ! 🍗🍟"
         )
     else:
@@ -732,7 +733,7 @@ async def envoyer_commande(context, user_id):
         )
 
     keyboard_liens = [
-        [InlineKeyboardButton(f"🍟 Mon code McDo {i+1}", url=l)]
+        [InlineKeyboardButton(f"🍟 Mes points McDo {i+1}", url=l)]
         for i, l in enumerate(liens_valides)
     ]
     keyboard_liens.append([InlineKeyboardButton("🏪 Retour Boutique", callback_data="menu")])
