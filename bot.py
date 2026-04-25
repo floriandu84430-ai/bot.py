@@ -2,7 +2,7 @@ import os
 import time
 import threading
 import logging
-from io import BytesIO
+from datetime import datetime
 from supabase import create_client, Client
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
@@ -15,6 +15,7 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN")
 ADMIN_ID = int(os.environ.get("ADMIN_ID", "6791451829"))
 PAYPAL_LINK = "https://www.paypal.com/paypalme/FrankRoger149"
 SUPPORT_USERNAME = "@fr26ulka"
+MAX_COMMANDES_PAR_JOUR = 3
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
@@ -44,10 +45,54 @@ stock_lock = threading.Lock()
 user_state = {}
 BOT_OUVERT = True
 commandes_count = {}
+commandes_jour = {}
 cart = {}
 cart_timestamps = {}
 warned_users = set()
 pending_admin = {}
+pending_screenshots = {}  # {user_id: {"detail": str, "nb_liens": int}}
+tous_clients = set()
+
+# ===== PARRAINAGE =====
+filleuls = {}  # {user_id: parrain_id | "done"}
+
+def generer_code_parrainage(user_id):
+    return f"MC{user_id}"
+
+def get_parrain_from_code(code):
+    try:
+        parrain_id = int(code.replace("MC", ""))
+        return parrain_id
+    except Exception:
+        return None
+
+# ===== MESSAGE SELON HEURE =====
+def get_greeting():
+    heure = datetime.utcnow().hour + 1
+    if 6 <= heure < 12:
+        return "☀️ Bonne matinée !"
+    elif 12 <= heure < 14:
+        return "🍔 C'est l'heure du déjeuner !"
+    elif 14 <= heure < 19:
+        return "😎 Bonne après-midi !"
+    elif 19 <= heure < 22:
+        return "🌙 Bonne soirée !"
+    else:
+        return "🌙 Bonne nuit !"
+
+# ===== LIMITE COMMANDES PAR JOUR =====
+def get_commandes_jour(user_id):
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    if user_id in commandes_jour:
+        date, count = commandes_jour[user_id]
+        if date == today:
+            return count
+    return 0
+
+def incrementer_commandes_jour(user_id):
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    count = get_commandes_jour(user_id)
+    commandes_jour[user_id] = (today, count + 1)
 
 # ===== PROMO MESSAGE =====
 PROMO_MESSAGE = """
@@ -124,7 +169,6 @@ def touch_cart(user_id):
     warned_users.discard(user_id)
 
 def freeze_cart(user_id):
-    """Gèle le timer du panier quand le client envoie son screenshot"""
     cart_timestamps.pop(user_id, None)
     warned_users.discard(user_id)
 
@@ -144,9 +188,9 @@ def get_timer_text(user_id):
 # ===== SAFE EDIT =====
 async def safe_edit(query, text, reply_markup=None):
     try:
-        await query.edit_message_text(text, reply_markup=reply_markup)
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
     except Exception:
-        await query.message.reply_text(text, reply_markup=reply_markup)
+        await query.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
 
 # ===== BOUTONS TRANCHE =====
 def get_keyboard_tranche(user_id):
@@ -177,11 +221,8 @@ async def cleanup_carts(context):
 
     for user_id in list(cart.keys()):
         last_seen = cart_timestamps.get(user_id)
-
-        # BUG FIX : si le timer est gelé (screenshot envoyé), on ne touche pas au panier
         if last_seen is None:
             continue
-
         elapsed = now - last_seen
 
         if elapsed > TIMEOUT:
@@ -212,30 +253,84 @@ async def cleanup_carts(context):
 
 # ===== START =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message:
+        user_id = update.message.from_user.id
+        args = context.args
+    else:
+        user_id = update.callback_query.from_user.id
+        args = []
+
+    tous_clients.add(user_id)
+
+    # Gestion parrainage
+    if args and args[0].startswith("MC") and user_id not in filleuls:
+        parrain_id = get_parrain_from_code(args[0])
+        if parrain_id and parrain_id != user_id:
+            filleuls[user_id] = parrain_id
+
     if not BOT_OUVERT:
+        msg = MESSAGE_FERME
         if update.message:
-            await update.message.reply_text(MESSAGE_FERME)
+            await update.message.reply_text(msg)
         else:
-            await update.callback_query.message.reply_text(MESSAGE_FERME)
+            await update.callback_query.message.reply_text(msg)
         return
 
-    text = (
-        "👋 Bienvenue !\n\n"
-        "🛍️ Comment utiliser le bot :\n"
-        "1. Boutique\n"
-        "2. Panier\n"
-        "3. Paiement\n"
-        "4. Envoie ton screenshot 📸\n"
-        "5. Je valide et tu reçois ton lien"
-    )
+    greeting = get_greeting()
+    est_nouveau = commandes_count.get(user_id, 0) == 0
+    est_filleul = user_id in filleuls and filleuls[user_id] != "done"
+    code_parrainage = generer_code_parrainage(user_id)
+
+    if est_filleul:
+        text = (
+            f"{greeting}\n\n"
+            f"🎁 *Bienvenue chez McDo Plans !*\n\n"
+            f"Ton ami t'a offert un *lien 50→74 pts gratuit* ! 🎉\n"
+            f"Il sera ajouté automatiquement à ta première commande ✅\n\n"
+            f"🛍️ *Comment ça marche :*\n"
+            f"1️⃣ Choisis ta tranche de points\n"
+            f"2️⃣ Ajoute au panier\n"
+            f"3️⃣ Paie via PayPal\n"
+            f"4️⃣ Envoie ton screenshot 📸\n"
+            f"5️⃣ Reçois ta capture d'écran avec le code barre 🍟\n\n"
+            f"🤝 Ton code parrainage : `{code_parrainage}`\n"
+            f"Partage-le et gagne *2 liens offerts* par ami !"
+        )
+    elif est_nouveau:
+        text = (
+            f"{greeting}\n\n"
+            f"🍟 *Bienvenue chez McDo Plans !*\n\n"
+            f"Le meilleur endroit pour obtenir tes points McDo 🔥\n\n"
+            f"🛍️ *Comment ça marche :*\n"
+            f"1️⃣ Choisis ta tranche de points\n"
+            f"2️⃣ Ajoute au panier\n"
+            f"3️⃣ Paie via PayPal\n"
+            f"4️⃣ Envoie ton screenshot 📸\n"
+            f"5️⃣ Reçois ta capture d'écran avec le code barre 🍟\n\n"
+            f"🤝 Ton code parrainage : `{code_parrainage}`\n"
+            f"Partage-le et gagne *2 liens offerts* par ami !\n\n"
+            f"💡 Accumule 5 commandes et reçois un *lien gratuit* 🎁"
+        )
+    else:
+        count = commandes_count.get(user_id, 0)
+        restant = 5 - (count % 5)
+        text = (
+            f"{greeting}\n\n"
+            f"🍟 *Content de te revoir !*\n\n"
+            f"⭐ Tu as {count} commande(s) — encore {restant} pour ton lien offert ! 🎁\n\n"
+            f"🤝 Ton code parrainage : `{code_parrainage}`\n"
+            f"Partage-le et gagne *2 liens offerts* par ami !"
+        )
+
     keyboard = [
         [InlineKeyboardButton("🛍️ Boutique", callback_data="menu")],
         [InlineKeyboardButton("❓ Aide", callback_data="help")]
     ]
+
     if update.message:
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
     else:
-        await update.callback_query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+        await update.callback_query.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 # ===== MENU =====
 async def show_menu(query):
@@ -252,7 +347,7 @@ async def show_menu(query):
         keyboard.append([InlineKeyboardButton(text, callback_data=data)])
     keyboard.append([InlineKeyboardButton("🛒 Panier", callback_data="cart")])
     keyboard.append([InlineKeyboardButton("🔙 Retour", callback_data="start")])
-    await safe_edit(query, "🔥 Boutique :", InlineKeyboardMarkup(keyboard))
+    await safe_edit(query, "🔥 *Boutique :*", InlineKeyboardMarkup(keyboard))
 
 # ===== PANIER =====
 async def refresh_cart(query, user_id):
@@ -260,7 +355,7 @@ async def refresh_cart(query, user_id):
     if not user_cart:
         await safe_edit(query, "🛒 Panier vide")
         return
-    text = "🛒 TON PANIER :\n\n"
+    text = "🛒 *TON PANIER :*\n\n"
     total = 0
     keyboard = []
     for t, d in user_cart.items():
@@ -296,7 +391,7 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     data = query.data
     user_id = query.from_user.id
-    if data.startswith(("approve", "reject", "badlink", "move", "r1", "r2", "r3")):
+    if data.startswith(("approve", "reject", "badlink", "move", "r1", "r2", "r3", "confirm_pay", "cancel_pay")):
         return
     try:
         if data == "menu":
@@ -304,6 +399,9 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         elif data == "start":
             await start(update, context)
+
+        elif data == "noop":
+            pass
 
         elif data == "clear_cart":
             user_cart = cart.get(user_id, {})
@@ -318,6 +416,12 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         elif data.startswith("add|"):
             t = data.split("|")[1]
+
+            # Vérif limite commandes par jour
+            if get_commandes_jour(user_id) >= MAX_COMMANDES_PAR_JOUR:
+                await safe_edit(query, f"❌ Tu as atteint la limite de {MAX_COMMANDES_PAR_JOUR} commandes par jour.\n\nReviens demain ! 😊")
+                return
+
             lien = retirer_lien(t)
             if not lien:
                 await safe_edit(query, "❌ Stock vide pour cette tranche.")
@@ -366,16 +470,21 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             total = apply_discount(cart_total(user_cart), user_cart)
             touch_cart(user_id)
+
+            # Récap confirmation avant paiement
+            recap = "🧾 *RÉCAP DE TA COMMANDE :*\n\n"
+            for t, d in user_cart.items():
+                recap += f"• {tranches[t]['label']} x{d['qty']} = {d['qty'] * d['prix']}€\n"
+            if len(user_cart) >= 3:
+                recap += "\n🔥 -10% appliqué\n"
+            recap += f"\n💰 *Total : {total}€*\n\n"
+            recap += "C'est bon pour toi ?"
+
             keyboard = [
-                [InlineKeyboardButton("💰 Via PayPal", url=PAYPAL_LINK)],
-                [InlineKeyboardButton("📸 J'ai payé", callback_data="paid")],
-                [InlineKeyboardButton("🔙 Panier", callback_data="cart")]
+                [InlineKeyboardButton("✅ Oui je confirme", callback_data="confirm_pay")],
+                [InlineKeyboardButton("❌ Annuler", callback_data="cancel_pay")]
             ]
-            await safe_edit(
-                query,
-                f"💳 PAIEMENT\n\n💰 Total : {total}€\n\n{get_timer_text(user_id)}",
-                InlineKeyboardMarkup(keyboard)
-            )
+            await safe_edit(query, recap, InlineKeyboardMarkup(keyboard))
 
         elif data == "paid":
             touch_cart(user_id)
@@ -385,13 +494,51 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "help":
             await safe_edit(
                 query,
-                f"📌 Support : {SUPPORT_USERNAME}",
-                InlineKeyboardMarkup([[InlineKeyboardButton("🛍️ Boutique", callback_data="menu")]])
+                (
+                    f"❓ *AIDE*\n\n"
+                    f"1️⃣ Choisis ta tranche dans la boutique\n"
+                    f"2️⃣ Ajoute au panier\n"
+                    f"3️⃣ Confirme et paie via PayPal\n"
+                    f"4️⃣ Envoie le screenshot de ton paiement\n"
+                    f"5️⃣ Reçois ta capture d'écran avec le code barre !\n\n"
+                    f"📩 Support : {SUPPORT_USERNAME}"
+                ),
+                InlineKeyboardMarkup([[InlineKeyboardButton("🛍️ Boutique", callback_data="menu")]]),
             )
 
     except Exception as e:
         logging.error(e)
         await safe_edit(query, "❌ Erreur")
+
+# ===== CALLBACK CONFIRMATION PAIEMENT =====
+async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    user_id = query.from_user.id
+
+    if data == "confirm_pay":
+        user_cart = get_cart(user_id)
+        total = apply_discount(cart_total(user_cart), user_cart)
+        touch_cart(user_id)
+        keyboard = [
+            [InlineKeyboardButton("💰 Via PayPal", url=PAYPAL_LINK)],
+            [InlineKeyboardButton("📸 J'ai payé", callback_data="paid")],
+            [InlineKeyboardButton("🔙 Panier", callback_data="cart")]
+        ]
+        await safe_edit(
+            query,
+            f"💳 *PAIEMENT*\n\n💰 Total : {total}€\n\n{get_timer_text(user_id)}",
+            InlineKeyboardMarkup(keyboard)
+        )
+
+    elif data == "cancel_pay":
+        await refresh_cart(query, user_id)
+
+    elif data == "paid":
+        touch_cart(user_id)
+        user_state[user_id] = "awaiting_screenshot"
+        await safe_edit(query, "📸 Envoie ton screenshot maintenant.")
 
 # ===== PHOTO =====
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -412,6 +559,14 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for lien in d["items"]:
             tous_liens.append({"lien": lien, "tranche": t})
 
+    # Lien filleul si première commande
+    est_filleul = user_id in filleuls and filleuls[user_id] != "done"
+    if est_filleul:
+        lien_filleul = retirer_lien("50-74")
+        if lien_filleul:
+            tous_liens.append({"lien": lien_filleul, "tranche": "50-74"})
+            detail += f"• 🎁 Lien offert parrainage (50→74 pts)\n"
+
     final_total = apply_discount(total, user_cart)
     remise = f"\n⚠️ Remise -10% (base {round(total, 2)}€)" if len(user_cart) >= 3 else ""
 
@@ -419,7 +574,8 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "liens": tous_liens,
         "index": 0,
         "valides": [],
-        "total": len(tous_liens)
+        "total": len(tous_liens),
+        "detail": detail,
     }
 
     caption = (
@@ -445,12 +601,15 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-    # BUG FIX : on gèle le timer et on met l'état à "en_validation"
-    # Le panier ne sera plus supprimé automatiquement
     freeze_cart(user_id)
     user_state[user_id] = "en_validation"
 
-    await update.message.reply_text("✅ Reçu ! En attente de validation par l'admin.")
+    await update.message.reply_text(
+        "✅ *Reçu !*\n\n"
+        "⏳ Ta commande est en cours de traitement...\n"
+        "Tu recevras ta capture d'écran dans quelques minutes ! 🍟",
+        parse_mode="Markdown"
+    )
 
 # ===== ADMIN CALLBACK =====
 async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -459,7 +618,6 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
 
     try:
-        # ===== LIEN OK =====
         if data.startswith("approve"):
             user_id = int(data.split("|")[1])
             pending = pending_admin.get(user_id)
@@ -472,6 +630,15 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pending["index"] += 1
 
             if pending["index"] < len(pending["liens"]):
+                # Suivi temps réel client
+                try:
+                    await context.bot.send_message(
+                        chat_id=user_id,
+                        text=f"✅ Lien {pending['index']}/{pending['total']} validé... encore un peu ! ⏳"
+                    )
+                except Exception:
+                    pass
+
                 prochain = pending["liens"][pending["index"]]
                 num = pending["index"] + 1
                 total = len(pending["liens"])
@@ -501,7 +668,6 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
 
-        # ===== MAUVAIS LIEN =====
         elif data.startswith("badlink"):
             user_id = int(data.split("|")[1])
             pending = pending_admin.get(user_id)
@@ -527,7 +693,6 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=get_keyboard_tranche(user_id)
             )
 
-        # ===== DÉPLACER VERS TRANCHE =====
         elif data.startswith("move"):
             parts = data.split("|")
             user_id = int(parts[1])
@@ -561,7 +726,6 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 pending["liens"][pending["index"]] = {"lien": nouveau_lien, "tranche": tranche_actuelle}
                 num = pending["index"] + 1
                 total = len(pending["liens"])
-
                 keyboard = [
                     [
                         InlineKeyboardButton("✅ Lien OK", callback_data=f"approve|{user_id}"),
@@ -569,7 +733,6 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ],
                     [InlineKeyboardButton("❌ Refuser paiement", callback_data=f"reject|{user_id}")]
                 ]
-
                 await context.bot.send_message(
                     chat_id=ADMIN_ID,
                     text=(
@@ -589,7 +752,6 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     prochain = pending["liens"][pending["index"]]
                     num = pending["index"] + 1
                     total = len(pending["liens"])
-
                     keyboard = [
                         [
                             InlineKeyboardButton("✅ Lien OK", callback_data=f"approve|{user_id}"),
@@ -597,7 +759,6 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         ],
                         [InlineKeyboardButton("❌ Refuser paiement", callback_data=f"reject|{user_id}")]
                     ]
-
                     await context.bot.send_message(
                         chat_id=ADMIN_ID,
                         text=f"🔗 Lien {num}/{total} à vérifier :\n{prochain['lien']}",
@@ -606,7 +767,6 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 else:
                     liens_deja_valides = pending["valides"]
                     manquants = pending["total"] - len(liens_deja_valides)
-
                     await context.bot.send_message(
                         chat_id=ADMIN_ID,
                         text=(
@@ -615,41 +775,32 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             f"❌ Manquants : {manquants}\n\nLe client a été prévenu."
                         )
                     )
-
                     if liens_deja_valides:
-                        keyboard_liens = [
-                            [InlineKeyboardButton(f"🍟 Lien McDo {i+1}", url=l)]
-                            for i, l in enumerate(liens_deja_valides)
-                        ]
-                        keyboard_liens.append([InlineKeyboardButton("🏪 Retour Boutique", callback_data="menu")])
                         await context.bot.send_message(
                             chat_id=user_id,
                             text=(
                                 f"🍟 *TA COMMANDE EST PARTIELLEMENT LIVRÉE*\n\n"
                                 f"✅ {len(liens_deja_valides)} lien(s) sur {pending['total']} disponibles.\n\n"
-                                f"😔 Désolé, {manquants} lien(s) n'étaient plus disponibles en stock.\n\n"
-                                f"Tu seras remboursé uniquement pour le(s) lien(s) manquant(s) et on t'offre un cadeau en compensation ! 🎁\n\n"
+                                f"😔 Désolé, {manquants} lien(s) n'étaient plus disponibles.\n\n"
+                                f"Tu seras remboursé et on t'offre un cadeau en compensation ! 🎁\n\n"
                                 f"Contacte le support : {SUPPORT_USERNAME}"
                             ),
-                            reply_markup=InlineKeyboardMarkup(keyboard_liens),
                             parse_mode="Markdown"
                         )
                     else:
                         await context.bot.send_message(
                             chat_id=user_id,
                             text=(
-                                f"😔 Désolé, aucun lien valide disponible pour ta commande.\n\n"
-                                f"Tu seras remboursé et on t'offre un cadeau en compensation ! 🎁\n\n"
+                                f"😔 Désolé, aucun lien valide disponible.\n\n"
+                                f"Tu seras remboursé et on t'offre un cadeau ! 🎁\n\n"
                                 f"Contacte le support : {SUPPORT_USERNAME}"
                             )
                         )
-
                     pending_admin.pop(user_id, None)
                     cart.pop(user_id, None)
                     cart_timestamps.pop(user_id, None)
                     user_state.pop(user_id, None)
 
-        # ===== REFUSER PAIEMENT =====
         elif data.startswith("reject"):
             user_id = data.split("|")[1]
             keyboard = [
@@ -675,7 +826,6 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "r2": "Montant incorrect",
                 "r3": "Pas de paiement"
             }
-            # BUG FIX : on remet les liens en stock lors du refus
             pending = pending_admin.pop(user_id, None)
             if pending:
                 for item in pending["liens"]:
@@ -695,6 +845,7 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
             cart.pop(user_id, None)
             cart_timestamps.pop(user_id, None)
             user_state.pop(user_id, None)
+            pending_screenshots.pop(user_id, None)
 
             try:
                 await query.message.delete()
@@ -714,35 +865,28 @@ async def envoyer_commande(context, user_id):
     liens_valides = pending["valides"]
     total_demande = pending["total"]
     manquants = total_demande - len(liens_valides)
+    greeting = get_greeting()
 
     if manquants == 0:
         msg = (
+            f"{greeting}\n\n"
             f"🍟 *TA COMMANDE EST PRÊTE !*\n\n"
-            f"Voici tes *{len(liens_valides)}* accès McDo ✅\n\n"
-            f"👇 Clique sur le bouton ci-dessous\n"
-            f"Ouvre la page et présente le code barre à la borne McDo !\n\n"
-            f"Bon appétit ! 🍗🍟"
+            f"✅ {len(liens_valides)} accès McDo validés !\n\n"
+            f"📸 Tu vas recevoir tes captures d'écran avec le code barre.\n"
+            f"Présente-le à la borne McDo et c'est tout ! 🍗🍟"
         )
     else:
         msg = (
             f"🍟 *TA COMMANDE EST PARTIELLEMENT LIVRÉE*\n\n"
             f"✅ {len(liens_valides)} lien(s) sur {total_demande} disponibles.\n\n"
-            f"Désolé, {manquants} lien(s) n'étaient plus disponibles en stock.\n\n"
-            f"Tu seras remboursé uniquement pour le(s) lien(s) manquant(s) et on t'offre un cadeau en compensation ! 🎁\n\n"
+            f"😔 Désolé, {manquants} lien(s) n'étaient plus disponibles.\n\n"
+            f"Tu seras remboursé et on t'offre un cadeau ! 🎁\n\n"
             f"Contacte le support : {SUPPORT_USERNAME}"
         )
 
-    keyboard_liens = [
-        [InlineKeyboardButton(f"🍟 Mes points McDo {i+1}", url=l)]
-        for i, l in enumerate(liens_valides)
-    ]
-    keyboard_liens.append([InlineKeyboardButton("🏪 Retour Boutique", callback_data="menu")])
-
-    # BUG FIX : PROMO_MESSAGE envoyé une seule fois
     await context.bot.send_message(
         chat_id=user_id,
         text=msg,
-        reply_markup=InlineKeyboardMarkup(keyboard_liens),
         parse_mode="Markdown"
     )
 
@@ -752,27 +896,91 @@ async def envoyer_commande(context, user_id):
         parse_mode="Markdown"
     )
 
+    # Stocker en attente de screenshots
+    detail_str = pending.get("detail", "")
+    pending_screenshots[user_id] = {
+        "detail": detail_str,
+        "nb_liens": len(liens_valides)
+    }
+
+    # Rappel admin pour envoyer les screenshots
+    await context.bot.send_message(
+        chat_id=ADMIN_ID,
+        text=(
+            f"📸 *N'oublie pas d'envoyer les screenshots !*\n\n"
+            f"👤 User : `{user_id}`\n"
+            f"📦 {len(liens_valides)} capture(s) à envoyer\n\n"
+            f"👉 `/send {user_id}`"
+        ),
+        parse_mode="Markdown"
+    )
+
     cart.pop(user_id, None)
     cart_timestamps.pop(user_id, None)
     warned_users.discard(user_id)
     user_state.pop(user_id, None)
 
+    incrementer_commandes_jour(user_id)
     commandes_count[user_id] = commandes_count.get(user_id, 0) + 1
     count = commandes_count[user_id]
 
+    # Récompense parrain à la première commande du filleul
+    if user_id in filleuls and filleuls[user_id] != "done":
+        parrain_id = filleuls[user_id]
+        filleuls[user_id] = "done"
+        lien1 = retirer_lien("50-74")
+        lien2 = retirer_lien("50-74")
+        liens_parrain = [l for l in [lien1, lien2] if l]
+        if liens_parrain:
+            pending_screenshots[parrain_id] = {
+                "detail": f"🎁 Cadeau parrainage x{len(liens_parrain)} (50→74 pts)",
+                "nb_liens": len(liens_parrain)
+            }
+            await context.bot.send_message(
+                chat_id=parrain_id,
+                text=(
+                    "🎉 *CADEAU PARRAINAGE !*\n\n"
+                    "👏 Ton ami vient de faire sa première commande !\n\n"
+                    f"📸 Tu vas recevoir tes *{len(liens_parrain)} capture(s)* offertes (50→74 pts) !"
+                ),
+                parse_mode="Markdown"
+            )
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=(
+                    f"📸 *Screenshot cadeau parrainage à envoyer !*\n\n"
+                    f"👤 Parrain : `{parrain_id}`\n"
+                    f"📦 {len(liens_parrain)} capture(s)\n\n"
+                    f"👉 `/send {parrain_id}`"
+                ),
+                parse_mode="Markdown"
+            )
+
+    # Fidélité
     if count % 5 == 0:
         lien_cadeau = retirer_lien("50-74")
         if lien_cadeau:
+            pending_screenshots[user_id] = {
+                "detail": "🎁 Cadeau fidélité (50→74 pts)",
+                "nb_liens": 1
+            }
             await context.bot.send_message(
                 chat_id=user_id,
                 text=(
                     "🎁 *CADEAU FIDÉLITÉ !*\n\n"
                     "🏆 Félicitations ! Tu as atteint 5 commandes !\n\n"
-                    "💙 Voici ton lien offert (50→74 pts) :"
+                    "📸 Tu vas recevoir ta capture d'écran offerte (50→74 pts) !"
                 ),
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🎀 Clique ici pour ton cadeau !", url=lien_cadeau)]
-                ]),
+                parse_mode="Markdown"
+            )
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=(
+                    f"📸 *Screenshot cadeau fidélité à envoyer !*\n\n"
+                    f"👤 User : `{user_id}`\n"
+                    f"📦 1 capture\n\n"
+                    f"👉 `/send {user_id}`"
+                ),
                 parse_mode="Markdown"
             )
     else:
@@ -820,11 +1028,11 @@ async def cmd_fidelite(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_stock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
         return
-    text = "📦 STOCK ACTUEL :\n\n"
+    text = "📦 *STOCK ACTUEL :*\n\n"
     for t, info in tranches.items():
         nb = len(lire_liens(t))
         text += f"{info['label']} : {nb} liens\n"
-    await update.message.reply_text(text)
+    await update.message.reply_text(text, parse_mode="Markdown")
 
 async def cmd_addstock(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
@@ -845,6 +1053,95 @@ async def cmd_addstock(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"✅ {len(nouveaux_liens)} lien(s) ajouté(s) à {tranches[tranche]['label']} !"
     )
 
+async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        return
+    total_commandes = sum(commandes_count.values())
+    total_clients = len(commandes_count)
+    total_parrainages = len([v for v in filleuls.values() if v == "done"])
+    text = (
+        f"📊 *STATS*\n\n"
+        f"👥 Clients total : {len(tous_clients)}\n"
+        f"🛍️ Clients ayant commandé : {total_clients}\n"
+        f"📦 Commandes total : {total_commandes}\n"
+        f"🤝 Parrainages réussis : {total_parrainages}\n"
+    )
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+async def cmd_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        return
+    if not pending_screenshots:
+        await update.message.reply_text("✅ Aucune commande en attente de screenshots !")
+        return
+    text = "📋 *COMMANDES EN ATTENTE DE SCREENSHOTS :*\n\n"
+    for i, (uid, info) in enumerate(pending_screenshots.items(), 1):
+        text += (
+            f"{i}. 👤 `{uid}`\n"
+            f"   📦 {info['nb_liens']} capture(s)\n"
+            f"   📝 {info['detail']}\n"
+            f"   👉 `/send {uid}`\n\n"
+        )
+    await update.message.reply_text(text, parse_mode="Markdown")
+
+async def cmd_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        return
+    args = context.args
+    if not args:
+        await update.message.reply_text("Usage : /send [user_id]\nEnsuite envoie la/les photo(s)")
+        return
+    try:
+        target_id = int(args[0])
+        user_state[ADMIN_ID] = f"sending_to_{target_id}"
+        await update.message.reply_text(
+            f"📸 Envoie maintenant la/les capture(s) pour l'user `{target_id}`",
+            parse_mode="Markdown"
+        )
+    except Exception:
+        await update.message.reply_text("❌ User ID invalide")
+
+async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id != ADMIN_ID:
+        return
+    if not context.args:
+        await update.message.reply_text("Usage : /broadcast [message]")
+        return
+    message = " ".join(context.args)
+    sent = 0
+    failed = 0
+    for uid in tous_clients:
+        try:
+            await context.bot.send_message(chat_id=uid, text=f"📢 {message}")
+            sent += 1
+        except Exception:
+            failed += 1
+    await update.message.reply_text(f"✅ Message envoyé à {sent} clients ({failed} échecs)")
+
+# ===== HANDLER PHOTOS ADMIN (pour /send) =====
+async def handle_admin_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+
+    # Admin envoie des screenshots pour un client
+    if user_id == ADMIN_ID and isinstance(user_state.get(ADMIN_ID), str) and user_state[ADMIN_ID].startswith("sending_to_"):
+        target_id = int(user_state[ADMIN_ID].replace("sending_to_", ""))
+        photo = update.message.photo[-1].file_id
+        try:
+            await context.bot.send_photo(
+                chat_id=target_id,
+                photo=photo,
+                caption="🍟 *Ton code McDo !*\n\nPrésente ce code barre à la borne McDo 🍗",
+                parse_mode="Markdown"
+            )
+            pending_screenshots.pop(target_id, None)
+            await update.message.reply_text(f"✅ Screenshot envoyé à `{target_id}` !", parse_mode="Markdown")
+        except Exception as e:
+            await update.message.reply_text(f"❌ Erreur : {e}")
+        return
+
+    # Client envoie son screenshot de paiement
+    await handle_photo(update, context)
+
 # ===== MAIN =====
 if __name__ == "__main__":
     app = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -855,10 +1152,15 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("fidelite", cmd_fidelite))
     app.add_handler(CommandHandler("stock", cmd_stock))
     app.add_handler(CommandHandler("addstock", cmd_addstock))
+    app.add_handler(CommandHandler("stats", cmd_stats))
+    app.add_handler(CommandHandler("pending", cmd_pending))
+    app.add_handler(CommandHandler("send", cmd_send))
+    app.add_handler(CommandHandler("broadcast", cmd_broadcast))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown_message))
     app.add_handler(CallbackQueryHandler(admin_actions, pattern=r"^(approve|reject|badlink|move|r1|r2|r3)\|"))
+    app.add_handler(CallbackQueryHandler(handle_confirm, pattern=r"^(confirm_pay|cancel_pay|paid)$"))
     app.add_handler(CallbackQueryHandler(handle))
-    app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.PHOTO, handle_admin_photo))
 
     app.job_queue.run_repeating(cleanup_carts, interval=60, first=10)
 
