@@ -228,7 +228,8 @@ async def cleanup_carts(context):
             try:
                 await context.bot.send_message(
                     chat_id=user_id,
-                    text="⏳ Ton panier a expiré.\n\nTes articles ont été remis en stock.\n\nTape /start pour recommencer."
+                    text="⏳ Ton panier a expiré.\n\nTes articles ont été remis en stock.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛍️ Retour boutique", callback_data="menu")]])
                 )
             except Exception:
                 pass
@@ -238,7 +239,8 @@ async def cleanup_carts(context):
             try:
                 await context.bot.send_message(
                     chat_id=user_id,
-                    text="⚠️ Ton panier expire dans 2 minutes !\n\nFinis ta commande ou tes articles seront remis en stock."
+                    text="⚠️ Ton panier expire dans 2 minutes !\n\nFinis ta commande ou tes articles seront remis en stock.",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("💳 Payer maintenant", callback_data="pay")]])
                 )
             except Exception:
                 pass
@@ -853,21 +855,17 @@ async def envoyer_commande(context, user_id):
     liens_valides = pending["valides"]
     total_demande = pending["total"]
     manquants = total_demande - len(liens_valides)
-    greeting = get_greeting()
 
     if manquants == 0:
         msg = (
-            f"{greeting}\n\n"
-            f"🍟 *TA COMMANDE EST PRÊTE !*\n\n"
-            f"✅ {len(liens_valides)} accès McDo validés !\n\n"
-            f"📸 Tu vas recevoir tes captures d'écran avec le code barre.\n"
-            f"Présente-le à la borne McDo et c'est tout ! 🍗🍟"
+            f"🍟 *Commande validée !*\n\n"
+            f"📸 Ta capture d'écran arrive dans quelques instants..."
         )
     else:
         msg = (
-            f"🍟 *TA COMMANDE EST PARTIELLEMENT LIVRÉE*\n\n"
+            f"🍟 *Commande partiellement livrée*\n\n"
             f"✅ {len(liens_valides)} lien(s) sur {total_demande} disponibles.\n\n"
-            f"😔 Désolé, {manquants} lien(s) n'étaient plus disponibles.\n\n"
+            f"😔 Désolé, {manquants} lien(s) n'étaient plus disponibles.\n"
             f"Tu seras remboursé et on t'offre un cadeau ! 🎁\n\n"
             f"Contacte le support : {SUPPORT_USERNAME}"
         )
