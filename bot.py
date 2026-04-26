@@ -50,11 +50,11 @@ cart = {}
 cart_timestamps = {}
 warned_users = set()
 pending_admin = {}
-pending_screenshots = {}  # {user_id: {"detail": str, "nb_liens": int}}
+pending_screenshots = {}
 tous_clients = set()
 
 # ===== PARRAINAGE =====
-filleuls = {}  # {user_id: parrain_id | "done"}
+filleuls = {}
 
 def generer_code_parrainage(user_id):
     return f"MC{user_id}"
@@ -262,7 +262,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     tous_clients.add(user_id)
 
-    # Gestion parrainage
     if args and args[0].startswith("MC") and user_id not in filleuls:
         parrain_id = get_parrain_from_code(args[0])
         if parrain_id and parrain_id != user_id:
@@ -416,12 +415,9 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         elif data.startswith("add|"):
             t = data.split("|")[1]
-
-            # Vérif limite commandes par jour
             if get_commandes_jour(user_id) >= MAX_COMMANDES_PAR_JOUR:
                 await safe_edit(query, f"❌ Tu as atteint la limite de {MAX_COMMANDES_PAR_JOUR} commandes par jour.\n\nReviens demain ! 😊")
                 return
-
             lien = retirer_lien(t)
             if not lien:
                 await safe_edit(query, "❌ Stock vide pour cette tranche.")
@@ -470,16 +466,12 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             total = apply_discount(cart_total(user_cart), user_cart)
             touch_cart(user_id)
-
-            # Récap confirmation avant paiement
             recap = "🧾 *RÉCAP DE TA COMMANDE :*\n\n"
             for t, d in user_cart.items():
                 recap += f"• {tranches[t]['label']} x{d['qty']} = {d['qty'] * d['prix']}€\n"
             if len(user_cart) >= 3:
                 recap += "\n🔥 -10% appliqué\n"
-            recap += f"\n💰 *Total : {total}€*\n\n"
-            recap += "C'est bon pour toi ?"
-
+            recap += f"\n💰 *Total : {total}€*\n\nC'est bon pour toi ?"
             keyboard = [
                 [InlineKeyboardButton("✅ Oui je confirme", callback_data="confirm_pay")],
                 [InlineKeyboardButton("❌ Annuler", callback_data="cancel_pay")]
@@ -504,6 +496,15 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"📩 Support : {SUPPORT_USERNAME}"
                 ),
                 InlineKeyboardMarkup([[InlineKeyboardButton("🛍️ Boutique", callback_data="menu")]]),
+            )
+
+        elif data.startswith("send_screenshots|"):
+            # Bouton cliquable pour envoyer les screenshots
+            target_id = int(data.split("|")[1])
+            user_state[ADMIN_ID] = f"sending_to_{target_id}"
+            await query.message.reply_text(
+                f"📸 Envoie maintenant la/les capture(s) pour l'user `{target_id}`",
+                parse_mode="Markdown"
             )
 
     except Exception as e:
@@ -559,7 +560,6 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for lien in d["items"]:
             tous_liens.append({"lien": lien, "tranche": t})
 
-    # Lien filleul si première commande
     est_filleul = user_id in filleuls and filleuls[user_id] != "done"
     if est_filleul:
         lien_filleul = retirer_lien("50-74")
@@ -630,7 +630,6 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pending["index"] += 1
 
             if pending["index"] < len(pending["liens"]):
-                # Suivi temps réel client
                 try:
                     await context.bot.send_message(
                         chat_id=user_id,
@@ -735,10 +734,7 @@ async def admin_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ]
                 await context.bot.send_message(
                     chat_id=ADMIN_ID,
-                    text=(
-                        f"{action_text}\n\n"
-                        f"🔗 Nouveau lien {num}/{total} à vérifier :\n{nouveau_lien}"
-                    ),
+                    text=(f"{action_text}\n\n🔗 Nouveau lien {num}/{total} à vérifier :\n{nouveau_lien}"),
                     reply_markup=InlineKeyboardMarkup(keyboard)
                 )
             else:
@@ -884,34 +880,26 @@ async def envoyer_commande(context, user_id):
             f"Contacte le support : {SUPPORT_USERNAME}"
         )
 
-    await context.bot.send_message(
-        chat_id=user_id,
-        text=msg,
-        parse_mode="Markdown"
-    )
+    await context.bot.send_message(chat_id=user_id, text=msg, parse_mode="Markdown")
+    await context.bot.send_message(chat_id=user_id, text=PROMO_MESSAGE, parse_mode="Markdown")
 
-    await context.bot.send_message(
-        chat_id=user_id,
-        text=PROMO_MESSAGE,
-        parse_mode="Markdown"
-    )
-
-    # Stocker en attente de screenshots
     detail_str = pending.get("detail", "")
     pending_screenshots[user_id] = {
         "detail": detail_str,
         "nb_liens": len(liens_valides)
     }
 
-    # Rappel admin pour envoyer les screenshots
+    # Rappel admin avec bouton cliquable
     await context.bot.send_message(
         chat_id=ADMIN_ID,
         text=(
             f"📸 *N'oublie pas d'envoyer les screenshots !*\n\n"
             f"👤 User : `{user_id}`\n"
-            f"📦 {len(liens_valides)} capture(s) à envoyer\n\n"
-            f"👉 `/send {user_id}`"
+            f"📦 {len(liens_valides)} capture(s) à envoyer"
         ),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📸 Envoyer les screenshots", callback_data=f"send_screenshots|{user_id}")]
+        ]),
         parse_mode="Markdown"
     )
 
@@ -924,7 +912,7 @@ async def envoyer_commande(context, user_id):
     commandes_count[user_id] = commandes_count.get(user_id, 0) + 1
     count = commandes_count[user_id]
 
-    # Récompense parrain à la première commande du filleul
+    # Récompense parrain
     if user_id in filleuls and filleuls[user_id] != "done":
         parrain_id = filleuls[user_id]
         filleuls[user_id] = "done"
@@ -950,9 +938,11 @@ async def envoyer_commande(context, user_id):
                 text=(
                     f"📸 *Screenshot cadeau parrainage à envoyer !*\n\n"
                     f"👤 Parrain : `{parrain_id}`\n"
-                    f"📦 {len(liens_parrain)} capture(s)\n\n"
-                    f"👉 `/send {parrain_id}`"
+                    f"📦 {len(liens_parrain)} capture(s)"
                 ),
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📸 Envoyer les screenshots", callback_data=f"send_screenshots|{parrain_id}")]
+                ]),
                 parse_mode="Markdown"
             )
 
@@ -960,10 +950,7 @@ async def envoyer_commande(context, user_id):
     if count % 5 == 0:
         lien_cadeau = retirer_lien("50-74")
         if lien_cadeau:
-            pending_screenshots[user_id] = {
-                "detail": "🎁 Cadeau fidélité (50→74 pts)",
-                "nb_liens": 1
-            }
+            pending_screenshots[user_id] = {"detail": "🎁 Cadeau fidélité (50→74 pts)", "nb_liens": 1}
             await context.bot.send_message(
                 chat_id=user_id,
                 text=(
@@ -975,12 +962,10 @@ async def envoyer_commande(context, user_id):
             )
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
-                text=(
-                    f"📸 *Screenshot cadeau fidélité à envoyer !*\n\n"
-                    f"👤 User : `{user_id}`\n"
-                    f"📦 1 capture\n\n"
-                    f"👉 `/send {user_id}`"
-                ),
+                text=f"📸 *Screenshot cadeau fidélité à envoyer !*\n\n👤 User : `{user_id}`\n📦 1 capture",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📸 Envoyer les screenshots", callback_data=f"send_screenshots|{user_id}")]
+                ]),
                 parse_mode="Markdown"
             )
     else:
@@ -992,11 +977,7 @@ async def envoyer_commande(context, user_id):
 
     await context.bot.send_message(
         chat_id=ADMIN_ID,
-        text=(
-            f"✅ Commande envoyée !\n"
-            f"👤 User : {user_id}\n"
-            f"📦 Liens : {len(liens_valides)}/{total_demande}"
-        )
+        text=f"✅ Commande envoyée !\n👤 User : {user_id}\n📦 Liens : {len(liens_valides)}/{total_demande}"
     )
 
 # ===== COMMANDES ADMIN =====
@@ -1049,9 +1030,7 @@ async def cmd_addstock(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     nouveaux_liens = args[1:]
     ajouter_liens(tranche, nouveaux_liens)
-    await update.message.reply_text(
-        f"✅ {len(nouveaux_liens)} lien(s) ajouté(s) à {tranches[tranche]['label']} !"
-    )
+    await update.message.reply_text(f"✅ {len(nouveaux_liens)} lien(s) ajouté(s) à {tranches[tranche]['label']} !")
 
 async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
@@ -1075,31 +1054,15 @@ async def cmd_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("✅ Aucune commande en attente de screenshots !")
         return
     text = "📋 *COMMANDES EN ATTENTE DE SCREENSHOTS :*\n\n"
+    keyboard = []
     for i, (uid, info) in enumerate(pending_screenshots.items(), 1):
         text += (
             f"{i}. 👤 `{uid}`\n"
             f"   📦 {info['nb_liens']} capture(s)\n"
-            f"   📝 {info['detail']}\n"
-            f"   👉 `/send {uid}`\n\n"
+            f"   📝 {info['detail']}\n\n"
         )
-    await update.message.reply_text(text, parse_mode="Markdown")
-
-async def cmd_send(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.from_user.id != ADMIN_ID:
-        return
-    args = context.args
-    if not args:
-        await update.message.reply_text("Usage : /send [user_id]\nEnsuite envoie la/les photo(s)")
-        return
-    try:
-        target_id = int(args[0])
-        user_state[ADMIN_ID] = f"sending_to_{target_id}"
-        await update.message.reply_text(
-            f"📸 Envoie maintenant la/les capture(s) pour l'user `{target_id}`",
-            parse_mode="Markdown"
-        )
-    except Exception:
-        await update.message.reply_text("❌ User ID invalide")
+        keyboard.append([InlineKeyboardButton(f"📸 Envoyer à {uid}", callback_data=f"send_screenshots|{uid}")])
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.from_user.id != ADMIN_ID:
@@ -1118,11 +1081,10 @@ async def cmd_broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
             failed += 1
     await update.message.reply_text(f"✅ Message envoyé à {sent} clients ({failed} échecs)")
 
-# ===== HANDLER PHOTOS ADMIN (pour /send) =====
+# ===== HANDLER PHOTOS ADMIN =====
 async def handle_admin_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
 
-    # Admin envoie des screenshots pour un client
     if user_id == ADMIN_ID and isinstance(user_state.get(ADMIN_ID), str) and user_state[ADMIN_ID].startswith("sending_to_"):
         target_id = int(user_state[ADMIN_ID].replace("sending_to_", ""))
         photo = update.message.photo[-1].file_id
@@ -1133,13 +1095,11 @@ async def handle_admin_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 caption="🍟 *Ton code McDo !*\n\nPrésente ce code barre à la borne McDo 🍗",
                 parse_mode="Markdown"
             )
-            pending_screenshots.pop(target_id, None)
             await update.message.reply_text(f"✅ Screenshot envoyé à `{target_id}` !", parse_mode="Markdown")
         except Exception as e:
             await update.message.reply_text(f"❌ Erreur : {e}")
         return
 
-    # Client envoie son screenshot de paiement
     await handle_photo(update, context)
 
 # ===== MAIN =====
@@ -1154,7 +1114,6 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("addstock", cmd_addstock))
     app.add_handler(CommandHandler("stats", cmd_stats))
     app.add_handler(CommandHandler("pending", cmd_pending))
-    app.add_handler(CommandHandler("send", cmd_send))
     app.add_handler(CommandHandler("broadcast", cmd_broadcast))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown_message))
     app.add_handler(CallbackQueryHandler(admin_actions, pattern=r"^(approve|reject|badlink|move|r1|r2|r3)\|"))
