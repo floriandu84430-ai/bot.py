@@ -373,7 +373,10 @@ async def refresh_cart(query, user_id):
 
 # ===== UNKNOWN MESSAGE =====
 async def unknown_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Pour accéder à la boutique, tape /start")
+    await update.message.reply_text(
+        "👋 Bienvenue ! Clique ci-dessous pour accéder à la boutique :",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛍️ Boutique", callback_data="menu")]])
+    )
 
 # ===== CALLBACK USER =====
 async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -489,7 +492,10 @@ async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"5️⃣ Reçois ta capture d'écran avec le code barre !\n\n"
                     f"📩 Support : {SUPPORT_USERNAME}"
                 ),
-                InlineKeyboardMarkup([[InlineKeyboardButton("🛍️ Boutique", callback_data="menu")]]),
+                InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🛍️ Boutique", callback_data="menu")],
+                    [InlineKeyboardButton("📞 Contacter le support", url=f"https://t.me/{SUPPORT_USERNAME.replace('@', '')}")]
+                ]),
             )
 
         elif data.startswith("send_screenshots|"):
@@ -539,6 +545,10 @@ async def handle_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     if user_state.get(user_id) != "awaiting_screenshot":
+        await update.message.reply_text(
+            "👋 Tu n'as pas de commande en cours !",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🛍️ Boutique", callback_data="menu")]])
+        )
         return
 
     photo = update.message.photo[-1].file_id
