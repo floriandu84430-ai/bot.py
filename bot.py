@@ -96,21 +96,13 @@ def incrementer_commandes_jour(user_id):
 
 # ===== PROMO MESSAGE =====
 PROMO_MESSAGE = """
-🍟 MC DO COMMUNITY
+🔥 Rejoins notre communauté McDo !
 
-🔥 Rejoins la communauté pour accéder à :
+📲 Ouvre Telegram et clique ici :
+👉 https://t.me/fr26ulkaa
 
-⚡ Accès anticipé aux nouveaux liens
-🍟 Liens exclusifs sélectionnés
-🚨 Alertes instantanées
-
-🌐 Groupe public :
-https://t.me/fr26ulkaa
-
-🔒 Groupe privé :
-https://t.me/+zj7floPVaj02NjJk
-
-💡 Les meilleurs liens partent ici en premier
+⚡ Liens exclusifs en avant-première
+🎁 Cadeaux & promos réservés aux membres
 """
 
 MESSAGE_FERME = """
@@ -881,7 +873,6 @@ async def envoyer_commande(context, user_id):
         )
 
     await context.bot.send_message(chat_id=user_id, text=msg, parse_mode="Markdown")
-    await context.bot.send_message(chat_id=user_id, text=PROMO_MESSAGE, parse_mode="Markdown")
 
     detail_str = pending.get("detail", "")
     pending_screenshots[user_id] = {
@@ -1096,6 +1087,15 @@ async def handle_admin_photo(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 parse_mode="Markdown"
             )
             await update.message.reply_text(f"✅ Screenshot envoyé à `{target_id}` !", parse_mode="Markdown")
+            # Envoyer le promo après la capture
+            try:
+                await context.bot.send_message(
+                    chat_id=target_id,
+                    text=PROMO_MESSAGE,
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                pass
         except Exception as e:
             await update.message.reply_text(f"❌ Erreur : {e}")
         return
